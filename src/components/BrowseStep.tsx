@@ -470,7 +470,6 @@ export default function BrowseStep({
         placeholder="Search milestones, epics, iterations, stories…"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        className="mb-1"
       />
 
       <Section

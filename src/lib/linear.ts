@@ -27,7 +27,7 @@ export interface LinearLabel {
   id: string;
   name: string;
   color: string;
-  team: { id: string };
+  team: { id: string } | null;
 }
 
 export interface LinearIssue {

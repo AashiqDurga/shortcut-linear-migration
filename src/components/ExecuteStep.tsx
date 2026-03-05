@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { shortcutRequest, linearRequest, delay } from "@/lib/api";
+import { shortcutRequest, linearRequest, delay, withRetry } from "@/lib/api";
 import {
   LABELS_QUERY,
   INITIATIVE_BY_NAME_QUERY,
@@ -92,10 +92,11 @@ function buildInitiativeDescription(milestone: import("@/lib/shortcut").Shortcut
 }
 
 // Shortcut objective states → Linear initiative statuses
+// InitiativeStatus enum values: Planned | Active | Completed
 function shortcutObjectiveStateToLinear(state: string): string {
   switch (state?.toLowerCase()) {
     case "done":        return "Completed";
-    case "in progress": return "InProgress";
+    case "in progress": return "Active";
     case "to do":
     default:            return "Planned";
   }
@@ -281,7 +282,11 @@ export default function ExecuteStep({
         LABELS_QUERY
       );
       for (const label of labelsData.issueLabels.nodes) {
-        labelNameToId[label.name.toLowerCase()] = label.id;
+        // Only index labels that belong to the target team or are workspace-level (no team).
+        // Using a label from a different team causes "labelIds for incorrect team" errors.
+        if (!label.team || label.team.id === linearTeamId) {
+          labelNameToId[label.name.toLowerCase()] = label.id;
+        }
       }
       addLog(`Found ${Object.keys(labelNameToId).length} existing labels.`);
     } catch (err) {
@@ -378,18 +383,24 @@ export default function ExecuteStep({
     let migrationAborted = false;
 
     for (const milestone of selectedMilestones) {
+      // Linear initiative names are capped at 80 characters
+      const initiativeName = milestone.name.length > 80 ? milestone.name.slice(0, 77) + "…" : milestone.name;
+      if (initiativeName !== milestone.name) {
+        addLog(`  ⚠ Milestone name truncated to 80 chars: "${initiativeName}"`);
+      }
+
       // Check by name before creating — avoids duplicates on re-runs
       let existing: string | null = null;
       try {
         const check = await linearRequest<{ initiatives: { nodes: LinearInitiative[] } }>(
-          linearToken, INITIATIVE_BY_NAME_QUERY, { name: milestone.name }
+          linearToken, INITIATIVE_BY_NAME_QUERY, { name: initiativeName }
         );
         existing = check.initiatives.nodes[0]?.id ?? null;
       } catch { /* non-fatal */ }
 
       if (existing) {
         milestoneToInitiative[milestone.id] = existing;
-        addLog(`  Skipping "${milestone.name}" — already exists.`);
+        addLog(`  Skipping "${initiativeName}" — already exists.`);
         addResult({
           type: "initiative",
           sourceId: milestone.id,
@@ -398,14 +409,17 @@ export default function ExecuteStep({
         });
         continue;
       }
-      addLog(`  Creating initiative "${milestone.name}"…`);
+      addLog(`  Creating initiative "${initiativeName}"…`);
       try {
         const res = await linearRequest<{
           initiativeCreate: { success: boolean; initiative: LinearInitiative };
         }>(linearToken, CREATE_INITIATIVE_MUTATION, {
           input: {
-            name: milestone.name,
-            description: buildInitiativeDescription(milestone) || undefined,
+            name: initiativeName,
+            description: [
+              initiativeName !== milestone.name ? `**Full name:** ${milestone.name}\n` : "",
+              buildInitiativeDescription(milestone),
+            ].filter(Boolean).join("\n") || undefined,
             // completed_at_override is Shortcut's "Target date" on objectives.
             // Linear expects TimelessDate format: YYYY-MM-DD
             targetDate: milestone.completed_at_override
@@ -517,14 +531,21 @@ export default function ExecuteStep({
       addLog(`\nCreating ${selectedEpics.length} projects…`);
     }
     for (const epic of selectedEpics) {
-      const existingProject = existingProjectsByName[epic.name.toLowerCase()] ?? null;
+      const existingProject = existingProjectsByName[
+        (epic.name.length > 80 ? epic.name.slice(0, 77) + "…" : epic.name).toLowerCase()
+      ] ?? null;
       if (existingProject) {
         epicToProject[epic.id] = existingProject.id;
         addLog(`  Skipping "${epic.name}" — already exists.`);
         addResult({ type: "project", sourceId: epic.id, sourceName: epic.name, status: "skipped", linearId: existingProject.id, linearUrl: existingProject.url });
         continue;
       }
-      addLog(`  Creating project "${epic.name}"…`);
+      // Linear project names are capped at 80 characters
+      const projectName = epic.name.length > 80 ? epic.name.slice(0, 77) + "…" : epic.name;
+      if (projectName !== epic.name) {
+        addLog(`  ⚠ Epic name truncated to 80 chars: "${projectName}"`);
+      }
+      addLog(`  Creating project "${projectName}"…`);
       try {
         const projectState =
           epic.state === "done" || epic.state === "closed" ? "completed" : "started";
@@ -532,9 +553,12 @@ export default function ExecuteStep({
           projectCreate: { success: boolean; project: LinearProject };
         }>(linearToken, CREATE_PROJECT_MUTATION, {
           input: {
-            name: epic.name,
+            name: projectName,
             teamIds: [linearTeamId],
-            description: epic.description || undefined,
+            description: [
+              projectName !== epic.name ? `**Full name:** ${epic.name}\n` : "",
+              epic.description,
+            ].filter(Boolean).join("\n") || undefined,
             state: projectState,
           },
         });
@@ -657,25 +681,54 @@ export default function ExecuteStep({
 
         const rawDescription = buildIssueDescription(fullStory, scMemberNameMap);
         const description = await migrateInlineImages(rawDescription, shortcutToken, linearToken);
-        const res = await linearRequest<{
-          issueCreate: { success: boolean; issue: LinearIssue };
-        }>(linearToken, CREATE_ISSUE_MUTATION, {
-          input: {
-            teamId: linearTeamId,
-            title: story.name,
-            description,
-            stateId: linearStateId || undefined,
-            assigneeId: assigneeId,
-            labelIds: issueLabelIds.length > 0 ? issueLabelIds : undefined,
-            estimate: story.estimate ?? undefined,
-            projectId: projectId || undefined,
-            cycleId: cycleId || undefined,
-          },
-        });
+        // Build inputs from most to least complete — on validation failure we
+        // progressively strip optional fields rather than aborting.
+        const safeEstimate = (story.estimate != null && Number.isInteger(story.estimate) && story.estimate > 0)
+          ? story.estimate : undefined;
 
-        if (!res.issueCreate.success) throw new Error("issueCreate returned success=false");
+        const fullInput = {
+          teamId: linearTeamId, title: story.name, description,
+          stateId: linearStateId || undefined,
+          assigneeId: assigneeId,
+          labelIds: issueLabelIds.length > 0 ? issueLabelIds : undefined,
+          estimate: safeEstimate,
+          projectId: projectId || undefined,
+          cycleId: cycleId || undefined,
+        };
+        const noEstimateInput = { ...fullInput, estimate: undefined };
+        const minimalInput = {
+          teamId: linearTeamId, title: story.name, description,
+          stateId: linearStateId || undefined,
+          labelIds: issueLabelIds.length > 0 ? issueLabelIds : undefined,
+          projectId: projectId || undefined,
+          cycleId: cycleId || undefined,
+        };
 
-        const issue = res.issueCreate.issue;
+        type IssueCreateResult = { issueCreate: { success: boolean; issue: LinearIssue } };
+        const createFn = (input: typeof minimalInput) =>
+          withRetry(
+            () => linearRequest<IssueCreateResult>(linearToken, CREATE_ISSUE_MUTATION, { input }),
+            { label: `issue #${story.id}` }
+          );
+
+        let issueRes: IssueCreateResult | null = null;
+        try {
+          issueRes = await createFn(fullInput);
+        } catch (e1) {
+          addLog(`    ⚠ Full create failed, retrying without estimate/assignee: ${e1}`);
+          try {
+            issueRes = await createFn(noEstimateInput);
+            addLog(`    ⚠ Created without estimate${safeEstimate != null ? ` (${safeEstimate})` : ""}.`);
+          } catch (e2) {
+            addLog(`    ⚠ Still failing, retrying with minimal fields: ${e2}`);
+            issueRes = await createFn(minimalInput);
+            addLog(`    ⚠ Created with minimal fields — estimate and assignee skipped.`);
+          }
+        }
+
+        if (!issueRes.issueCreate.success) throw new Error("issueCreate returned success=false");
+
+        const issue = issueRes.issueCreate.issue;
         storyToIssue[story.id] = issue.id;
         addLog(`  ✓ Issue ${issue.identifier} created.`);
         addResult({
@@ -829,7 +882,8 @@ export default function ExecuteStep({
           addLog(`    Attached ${fullStory.linked_files.length} external link(s).`);
         }
       } catch (err) {
-        addLog(`  ✗ ${err}`);
+        addLog(`  ✗ Could not create issue "${story.name}" even with minimal fields: ${err}`);
+        addLog(`\n⛔ Migration aborted — fix the error above and try again.`);
         addResult({
           type: "issue",
           sourceId: story.id,
@@ -837,8 +891,17 @@ export default function ExecuteStep({
           status: "error",
           error: String(err),
         });
+        migrationAborted = true;
+        break;
       }
       await delay(150);
+    }
+
+    if (migrationAborted) {
+      setAborted(true);
+      setDone(true);
+      setRunning(false);
+      return;
     }
 
     // ------------------------------------------------------------------

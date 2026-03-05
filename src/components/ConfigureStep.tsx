@@ -43,9 +43,14 @@ function fromSelectValue(val: string) {
   return val === NONE ? "" : val;
 }
 
+function normalize(s: string) {
+  return s.toLowerCase().replace(/[-_\s]+/g, " ").trim();
+}
+
 function autoMatchState(scStateName: string, linearStates: LinearWorkflowState[]): string {
-  const name = scStateName.toLowerCase();
-  const exact = linearStates.find((s) => s.name.toLowerCase() === name);
+  const name = normalize(scStateName);
+  // Exact normalized match (handles "To-Do" ↔ "Todo", "In Progress" ↔ "in-progress", etc.)
+  const exact = linearStates.find((s) => normalize(s.name) === name);
   if (exact) return exact.id;
   if (name.includes("done") || name.includes("complete") || name.includes("delivered")) {
     const done = linearStates.find((s) => s.type === "completed");
@@ -55,11 +60,28 @@ function autoMatchState(scStateName: string, linearStates: LinearWorkflowState[]
     const cancelled = linearStates.find((s) => s.type === "cancelled");
     if (cancelled) return cancelled.id;
   }
-  if (name.includes("progress") || name.includes("development") || name.includes("review")) {
+  if (name.includes("progress") || name.includes("development")) {
     const started = linearStates.find((s) => s.type === "started");
     if (started) return started.id;
   }
-  const backlog = linearStates.find((s) => s.type === "backlog" || s.type === "unstarted");
+  if (name.includes("review")) {
+    const review = linearStates.find((s) => s.type === "started" && s.name.toLowerCase().includes("review"))
+      ?? linearStates.find((s) => s.type === "started");
+    if (review) return review.id;
+  }
+  // Inbox → triage state (Linear's inbox equivalent) or backlog
+  if (name === "inbox" || name.includes("inbox")) {
+    const triage = linearStates.find((s) => s.type === "triage");
+    if (triage) return triage.id;
+    const backlog = linearStates.find((s) => s.type === "backlog");
+    if (backlog) return backlog.id;
+  }
+  // To-Do / Planned → unstarted (not backlog)
+  if (name === "to-do" || name === "todo" || name.includes("planned") || name.includes("ready")) {
+    const unstarted = linearStates.find((s) => s.type === "unstarted");
+    if (unstarted) return unstarted.id;
+  }
+  const backlog = linearStates.find((s) => s.type === "backlog") ?? linearStates.find((s) => s.type === "unstarted");
   return backlog?.id ?? linearStates[0]?.id ?? "";
 }
 

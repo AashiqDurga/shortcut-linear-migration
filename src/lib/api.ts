@@ -34,7 +34,12 @@ export async function linearRequest<T>(
   }
   const json = await res.json();
   if (json.errors?.length) {
-    throw new Error(json.errors[0].message);
+    // Include extensions detail so transient vs validation errors are distinguishable
+    const first = json.errors[0];
+    const detail = first.extensions
+      ? `${first.message} [${JSON.stringify(first.extensions)}]`
+      : first.message;
+    throw new Error(detail);
   }
   return json.data;
 }
@@ -42,3 +47,37 @@ export async function linearRequest<T>(
 // Small delay to avoid hitting rate limits during migration
 export const delay = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+// Transient server-side errors that are safe to retry (not user/input errors)
+function isTransientError(err: unknown): boolean {
+  const msg = String(err).toLowerCase();
+  return (
+    msg.includes("query runner already released") ||
+    msg.includes("connection") ||
+    msg.includes("econnreset") ||
+    msg.includes("socket hang up") ||
+    msg.includes("etimedout") ||
+    msg.includes("service unavailable") ||
+    msg.includes("internal server error")
+  );
+}
+
+// Retry a function up to maxAttempts times on transient errors, with exponential backoff.
+// Non-transient errors (bad input, validation, etc.) throw immediately.
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  { maxAttempts = 3, baseDelayMs = 1500, label = "" } = {}
+): Promise<T> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const transient = isTransientError(err);
+      if (!transient || attempt === maxAttempts) throw err;
+      const wait = baseDelayMs * attempt;
+      console.warn(`[retry] ${label} attempt ${attempt} failed (transient), retrying in ${wait}ms…`, err);
+      await delay(wait);
+    }
+  }
+  throw new Error("withRetry: unreachable");
+}
