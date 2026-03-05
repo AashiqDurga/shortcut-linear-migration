@@ -5,8 +5,13 @@ import { NextRequest, NextResponse } from "next/server";
 // Files end up at uploads.linear.app — no external infra needed.
 
 export async function POST(req: NextRequest) {
-  const { shortcutToken, linearToken, fileUrl, filename, contentType, size } =
+  const { shortcutToken: bodyScToken, linearToken: bodyLinToken, fileUrl, filename, contentType } =
     await req.json();
+
+  // Fall back to env vars — same pattern as the other proxy routes.
+  // When tokens are configured server-side the client sends empty strings.
+  const shortcutToken = bodyScToken || process.env.SHORTCUT_API_TOKEN;
+  const linearToken = bodyLinToken || process.env.LINEAR_API_KEY;
 
   if (!shortcutToken || !linearToken || !fileUrl || !filename || !contentType) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -26,6 +31,8 @@ export async function POST(req: NextRequest) {
     );
   }
   const fileBytes = await download.arrayBuffer();
+  // Always use the real downloaded byte count — never trust the metadata size.
+  // S3 presigned URLs validate Content-Length against the value used when signing.
   const actualSize = fileBytes.byteLength;
 
   // 2. Ask Linear for a presigned upload URL
@@ -52,7 +59,7 @@ export async function POST(req: NextRequest) {
         }
       `,
       variables: {
-        size: size ?? actualSize,
+        size: actualSize,
         contentType,
         filename,
       },
@@ -75,11 +82,13 @@ export async function POST(req: NextRequest) {
     extraHeaders[h.key] = h.value;
   }
 
+  // Do not set Content-Length manually — the fetch client (undici/Node.js) computes
+  // it correctly from the ArrayBuffer body. An explicit value can desync with what
+  // S3 signed against and cause the upload to be rejected or truncated.
   const putRes = await fetch(uploadUrl, {
     method: "PUT",
     headers: {
       "Content-Type": contentType,
-      "Content-Length": String(actualSize),
       ...extraHeaders,
     },
     body: fileBytes,

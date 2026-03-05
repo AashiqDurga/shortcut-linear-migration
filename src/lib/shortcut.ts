@@ -113,10 +113,22 @@ export interface ShortcutTask {
   complete: boolean;
 }
 
+export interface ShortcutPullRequest {
+  id: number;
+  url: string;
+  title: string;
+  branch_name: string;
+  merged: boolean;
+  closed: boolean;
+  draft: boolean;
+  num_added: number;
+  num_removed: number;
+}
+
 export interface ShortcutStoryLink {
   id: number;
-  // "blocks" = this story blocks another; "is blocked by" = this story is blocked by another; "duplicates" = this story duplicates another
-  type: "blocks" | "is blocked by" | "duplicates";
+  // "blocks" = this story blocks another; "is blocked by" = this story is blocked by another; "duplicates" = this story duplicates another; "relates to" = general relation
+  type: "blocks" | "is blocked by" | "duplicates" | "relates to";
   subject_id: number; // the story doing the action
   object_id: number;  // the story being acted upon
 }
@@ -141,6 +153,7 @@ export interface ShortcutStory {
   labels: Array<{ id: number; name: string; color: string }>;
   estimate: number | null;
   external_links: string[];
+  pull_requests: ShortcutPullRequest[];
   story_links: ShortcutStoryLink[];
   tasks: ShortcutTask[];
   files: ShortcutFile[];

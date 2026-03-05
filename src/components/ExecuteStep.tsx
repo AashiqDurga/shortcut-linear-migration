@@ -24,7 +24,7 @@ import type {
   LinearProject,
   LinearIssue,
 } from "@/lib/linear";
-import type { ShortcutComment } from "@/lib/shortcut";
+import type { ShortcutComment, ShortcutPullRequest } from "@/lib/shortcut";
 import type { BrowseData, Selection } from "./BrowseStep";
 import type { MappingConfig, LinearData } from "./ConfigureStep";
 
@@ -100,6 +100,37 @@ function isGitHubPrLink(url: string) {
 function shortcutStoryId(url: string): number | null {
   const match = url.match(/app\.shortcut\.com\/[^/]+\/story\/(\d+)/);
   return match ? parseInt(match[1], 10) : null;
+}
+
+
+// Finds inline Shortcut CDN images in markdown, uploads each to Linear CDN,
+// and rewrites the URL so they remain accessible after Shortcut is closed.
+async function migrateInlineImages(text: string, shortcutToken: string, linearToken: string): Promise<string> {
+  const imageRegex = /!\[([^\]]*)\]\((https?:\/\/(?:media\.shortcut\.com|media\.app\.shortcut\.com|media\.clubhouse\.io)[^)]+)\)/g;
+  const matches = [...text.matchAll(imageRegex)];
+  if (matches.length === 0) return text;
+
+  let result = text;
+  for (const match of matches) {
+    const [fullMatch, alt, url] = match;
+    try {
+      const rawFilename = url.split("/").pop()?.split("?")[0] ?? "image.png";
+      const ext = rawFilename.split(".").pop()?.toLowerCase() ?? "png";
+      const contentType = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/png";
+      const uploadRes = await fetch("/api/upload-asset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shortcutToken, linearToken, fileUrl: url, filename: rawFilename, contentType }),
+      });
+      if (uploadRes.ok) {
+        const { assetUrl } = await uploadRes.json();
+        result = result.replace(fullMatch, `![${alt}](${assetUrl})`);
+      }
+    } catch {
+      // Leave original URL on failure
+    }
+  }
+  return result;
 }
 
 function buildIssueDescription(
@@ -230,6 +261,7 @@ export default function ExecuteStep({
     const milestoneToInitiative: Record<number, string> = {}; // milestone id → initiative id
     const labelNameToId: Record<string, string> = {}; // label name (lower) → linear id
     const storyToIssue: Record<number, string> = {}; // shortcut story id → linear issue id
+    const storyLinksMap: Record<number, import("@/lib/shortcut").ShortcutStoryLink[]> = {}; // story id → full story_links
 
     // Fetch the Shortcut workspace slug so we can build story backlink URLs.
     // GET /member returns the authenticated user's workspace info.
@@ -384,7 +416,6 @@ export default function ExecuteStep({
               ? milestone.completed_at_override.split("T")[0]
               : undefined,
             status: shortcutObjectiveStateToLinear(milestone.state),
-            teamIds: [linearTeamId],
           },
         });
         if (res.initiativeCreate.success) {
@@ -612,8 +643,8 @@ export default function ExecuteStep({
       const cycleId = story.iteration_id ? iterationToCycle[story.iteration_id] : undefined;
 
       try {
-        // /epics/{id}/stories returns slim objects — description is empty or truncated.
-        // Fetch the full story to get complete description, tasks, and file data.
+        // /epics/{id}/stories returns slim objects — description, files, and story_links
+        // are empty or missing. Fetch the full story to get complete data.
         let fullStory = story;
         try {
           fullStory = await shortcutRequest<typeof story>(
@@ -623,7 +654,13 @@ export default function ExecuteStep({
           addLog(`    ⚠ Could not fetch full story details for #${story.id}, using partial data.`);
         }
 
-        const description = buildIssueDescription(fullStory, scMemberNameMap);
+        // Save story_links from the full story for the relations pass (Step 7)
+        if (fullStory.story_links?.length) {
+          storyLinksMap[story.id] = fullStory.story_links;
+        }
+
+        const rawDescription = buildIssueDescription(fullStory, scMemberNameMap);
+        const description = await migrateInlineImages(rawDescription, shortcutToken, linearToken);
         const res = await linearRequest<{
           issueCreate: { success: boolean; issue: LinearIssue };
         }>(linearToken, CREATE_ISSUE_MUTATION, {
@@ -675,68 +712,74 @@ export default function ExecuteStep({
           await delay(100);
         }
 
-        // Migrate comments
-        if (fullStory.num_comments > 0) {
-          try {
-            const comments = await shortcutRequest<ShortcutComment[]>(
-              shortcutToken,
-              "GET",
-              `stories/${story.id}/comments`
-            );
-            for (const comment of comments) {
-              try {
-                await linearRequest(linearToken, CREATE_COMMENT_MUTATION, {
-                  input: {
-                    issueId: issue.id,
-                    body: buildCommentBody(comment, scMemberNameMap),
-                  },
-                });
-                // Upload files attached to this comment to Linear CDN
-                for (const file of comment.files ?? []) {
-                  try {
-                    const uploadRes = await fetch("/api/upload-asset", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        shortcutToken,
-                        linearToken,
-                        fileUrl: file.url,
-                        filename: file.name,
-                        contentType: file.content_type,
-                        size: file.size,
-                      }),
-                    });
-                    if (uploadRes.ok) {
-                      const { assetUrl } = await uploadRes.json();
+        // Migrate comments — always attempt fetch rather than relying on
+        // num_comments which can be unreliable on full story objects.
+        try {
+          const comments = await shortcutRequest<ShortcutComment[]>(
+            shortcutToken,
+            "GET",
+            `stories/${story.id}/comments`
+          );
+          for (const comment of comments) {
+            try {
+              let commentBody = buildCommentBody(comment, scMemberNameMap);
+              // Upload image files to Linear CDN and embed inline; other files as links.
+              for (const file of comment.files ?? []) {
+                try {
+                  const uploadRes = await fetch("/api/upload-asset", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ shortcutToken, linearToken, fileUrl: file.url, filename: file.name, contentType: file.content_type, size: file.size }),
+                  });
+                  if (uploadRes.ok) {
+                    const { assetUrl } = await uploadRes.json();
+                    if (file.content_type.startsWith("image/")) {
+                      commentBody += `\n\n![${file.name}](${assetUrl})`;
+                    } else {
                       await linearRequest(linearToken, CREATE_ATTACHMENT_MUTATION, {
                         input: { issueId: issue.id, title: file.name, subtitle: `From comment · ${file.content_type}`, url: assetUrl },
                       });
                     }
-                    await delay(100);
-                  } catch {
-                    addLog(`    ✗ Could not upload comment file: ${file.name}`);
                   }
+                  await delay(100);
+                } catch {
+                  addLog(`    ✗ Could not upload comment file: ${file.name}`);
                 }
-                await delay(100);
-              } catch {
-                addLog(`    ✗ Comment ${comment.id} failed to migrate.`);
               }
+              await linearRequest(linearToken, CREATE_COMMENT_MUTATION, {
+                input: { issueId: issue.id, body: commentBody },
+              });
+              await delay(100);
+            } catch (err) {
+              addLog(`    ✗ Comment ${comment.id} failed: ${err}`);
             }
-            addLog(`    Migrated ${comments.length} comments.`);
-          } catch {
-            addLog(`    ✗ Could not fetch comments for story #${story.id}.`);
           }
+          if (comments.length > 0) addLog(`    Migrated ${comments.length} comment(s).`);
+        } catch (err) {
+          addLog(`    ✗ Could not fetch comments for story #${story.id}: ${err}`);
         }
 
-        // GitHub PR links → proper Linear attachments (show live PR status)
-        const prLinks = (fullStory.external_links ?? []).filter(isGitHubPrLink);
-        for (const prUrl of prLinks) {
+        // GitHub PRs — primary source is pull_requests (GitHub integration data).
+        // Also catch any GitHub PR URLs manually added to external_links.
+        const integratedPRs: ShortcutPullRequest[] = fullStory.pull_requests ?? [];
+        const manualPrUrls = (fullStory.external_links ?? []).filter(isGitHubPrLink);
+        // Merge, deduping by URL
+        const allPrUrls = new Map<string, string>(); // url → title
+        for (const pr of integratedPRs) {
+          const status = pr.merged ? "Merged" : pr.closed ? "Closed" : "Open";
+          allPrUrls.set(pr.url, `PR #${pr.id}: ${pr.title} (${status})`);
+        }
+        for (const url of manualPrUrls) {
+          if (!allPrUrls.has(url)) {
+            allPrUrls.set(url, `PR: ${url.split("github.com/")[1] ?? url}`);
+          }
+        }
+        for (const [prUrl, prTitle] of allPrUrls) {
           try {
-            const prLabel = prUrl.split("github.com/")[1] ?? prUrl;
             await linearRequest(linearToken, CREATE_ATTACHMENT_MUTATION, {
               input: {
                 issueId: issue.id,
-                title: `PR: ${prLabel}`,
+                title: prTitle,
                 subtitle: "GitHub Pull Request",
                 url: prUrl,
                 iconUrl: "https://github.githubassets.com/favicons/favicon.png",
@@ -744,34 +787,23 @@ export default function ExecuteStep({
             });
             await delay(100);
           } catch {
-            addLog(`    ✗ Could not attach PR link: ${prUrl}`);
+            addLog(`    ✗ Could not attach PR: ${prUrl}`);
           }
         }
-        if (prLinks.length > 0) {
-          addLog(`    Attached ${prLinks.length} GitHub PR link(s).`);
+        if (allPrUrls.size > 0) {
+          addLog(`    Attached ${allPrUrls.size} GitHub PR(s).`);
         }
 
-        // Direct Shortcut uploads → upload to Linear's own CDN, then attachmentCreate.
-        // This avoids Shortcut CDN URLs breaking when the account is cancelled.
+        // Upload story files to Linear CDN so URLs remain valid after Shortcut is closed.
         for (const file of fullStory.files ?? []) {
           try {
             addLog(`    Uploading ${file.name}…`);
             const uploadRes = await fetch("/api/upload-asset", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                shortcutToken,
-                linearToken,
-                fileUrl: file.url,
-                filename: file.name,
-                contentType: file.content_type,
-                size: file.size,
-              }),
+              body: JSON.stringify({ shortcutToken, linearToken, fileUrl: file.url, filename: file.name, contentType: file.content_type, size: file.size }),
             });
-            if (!uploadRes.ok) {
-              const err = await uploadRes.text();
-              throw new Error(err);
-            }
+            if (!uploadRes.ok) throw new Error(await uploadRes.text());
             const { assetUrl } = await uploadRes.json();
             await linearRequest(linearToken, CREATE_ATTACHMENT_MUTATION, {
               input: { issueId: issue.id, title: file.name, subtitle: file.content_type, url: assetUrl },
@@ -823,7 +855,7 @@ export default function ExecuteStep({
 
     const storiesWithLinks = selectedStories.filter(
       (s) =>
-        s.story_links?.some((l) => l.subject_id === s.id) ||
+        (storyLinksMap[s.id]?.some((l) => l.subject_id === s.id)) ||
         s.external_links?.some((l) => shortcutStoryId(l) !== null)
     );
 
@@ -836,17 +868,18 @@ export default function ExecuteStep({
         const issueId = storyToIssue[story.id];
         if (!issueId) continue;
 
-        // a) Explicit story_links (blocks / duplicates)
-        for (const link of story.story_links ?? []) {
+        // a) Explicit story_links from full story (blocks / duplicates / relates to)
+        for (const link of storyLinksMap[story.id] ?? []) {
           if (link.subject_id !== story.id) continue; // skip mirror entries
           const relatedIssueId = storyToIssue[link.object_id];
           if (!relatedIssueId) {
-            addLog(`  ⚠ #${story.id} ${link.type} #${link.object_id} — target not migrated, skipping.`);
+            addLog(`  ⚠ #${story.id} "${link.type}" #${link.object_id} — target not migrated, skipping.`);
             continue;
           }
           const linearType =
-            link.type === "blocks" ? "blocks" : link.type === "duplicates" ? "duplicate" : null;
-          if (!linearType) continue;
+            link.type === "blocks" ? "blocks"
+            : link.type === "duplicates" ? "duplicate"
+            : "relates_to"; // covers "relates to" and "is blocked by" (Linear handles blocks bidirectionally)
           try {
             await linearRequest(linearToken, CREATE_ISSUE_RELATION_MUTATION, {
               input: { issueId, relatedIssueId, type: linearType },
