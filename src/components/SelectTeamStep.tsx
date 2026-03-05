@@ -1,26 +1,38 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { shortcutRequest } from "@/lib/api";
+import { shortcutRequest, linearRequest } from "@/lib/api";
+import { TEAMS_QUERY } from "@/lib/linear";
 import type { ShortcutGroup } from "@/lib/shortcut";
+import type { LinearTeam } from "@/lib/linear";
 
 interface Props {
   shortcutToken: string;
+  linearToken: string;
   onSelect: (group: ShortcutGroup) => void;
   onBack: () => void;
 }
 
-export default function SelectTeamStep({ shortcutToken, onSelect, onBack }: Props) {
+export default function SelectTeamStep({ shortcutToken, linearToken, onSelect, onBack }: Props) {
   const [groups, setGroups] = useState<ShortcutGroup[]>([]);
+  const [linearTeamNames, setLinearTeamNames] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    shortcutRequest<ShortcutGroup[]>(shortcutToken, "GET", "groups")
-      .then((data) => setGroups(data))
+    Promise.all([
+      shortcutRequest<ShortcutGroup[]>(shortcutToken, "GET", "groups"),
+      linearRequest<{ teams: { nodes: LinearTeam[] } }>(linearToken, TEAMS_QUERY).catch(() => null),
+    ])
+      .then(([scGroups, linearData]) => {
+        setGroups(scGroups);
+        if (linearData) {
+          setLinearTeamNames(new Set(linearData.teams.nodes.map((t) => t.name.toLowerCase())));
+        }
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [shortcutToken]);
+  }, [shortcutToken, linearToken]);
 
   if (loading) {
     return (
@@ -68,6 +80,11 @@ export default function SelectTeamStep({ shortcutToken, onSelect, onBack }: Prop
               </div>
               <div className="flex items-center gap-3 text-xs text-gray-400 shrink-0 ml-4">
                 <span>{group.num_stories ?? "?"} stories</span>
+                {linearTeamNames.has(group.name.toLowerCase()) && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-green-50 border border-green-200 px-1.5 py-0.5 text-xs text-green-700 font-medium">
+                    ✓ team in Linear
+                  </span>
+                )}
                 <svg className="h-4 w-4 text-gray-300 group-hover:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>

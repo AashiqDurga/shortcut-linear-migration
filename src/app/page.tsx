@@ -150,6 +150,7 @@ export default function Home() {
         {step === "team" && (
           <SelectTeamStep
             shortcutToken={shortcutToken}
+            linearToken={linearToken}
             onSelect={handleSelectGroup}
             onBack={() => setStep("connect")}
           />
