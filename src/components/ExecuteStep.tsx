@@ -849,7 +849,7 @@ export default function ExecuteStep({
     // ------------------------------------------------------------------
     // Handles two sources of relations:
     //   a) story_links (blocks / duplicates) — only process subject side to avoid duplicates
-    //   b) external_links pointing to Shortcut story URLs → relates_to
+    //   b) external_links pointing to Shortcut story URLs → related
     //      Deduped by sorted pair key so A→B and B→A don't create two relations.
     const createdRelationPairs = new Set<string>();
 
@@ -876,10 +876,13 @@ export default function ExecuteStep({
             addLog(`  ⚠ #${story.id} "${link.type}" #${link.object_id} — target not migrated, skipping.`);
             continue;
           }
+          // "is blocked by" is the mirror of "blocks" on the other story —
+          // Linear creates the reciprocal automatically, so skip it here.
+          if (link.type === "is blocked by") continue;
           const linearType =
             link.type === "blocks" ? "blocks"
             : link.type === "duplicates" ? "duplicate"
-            : "relates_to"; // covers "relates to" and "is blocked by" (Linear handles blocks bidirectionally)
+            : "related"; // "relates to" → Linear's "related"
           try {
             await linearRequest(linearToken, CREATE_ISSUE_RELATION_MUTATION, {
               input: { issueId, relatedIssueId, type: linearType },
@@ -907,12 +910,12 @@ export default function ExecuteStep({
           createdRelationPairs.add(pairKey);
           try {
             await linearRequest(linearToken, CREATE_ISSUE_RELATION_MUTATION, {
-              input: { issueId, relatedIssueId, type: "relates_to" },
+              input: { issueId, relatedIssueId, type: "related" },
             });
             relationCount++;
             await delay(100);
           } catch (err) {
-            addLog(`  ✗ relates_to #${story.id} → #${linkedStoryId}: ${err}`);
+            addLog(`  ✗ related #${story.id} → #${linkedStoryId}: ${err}`);
             relationErrors++;
           }
         }
