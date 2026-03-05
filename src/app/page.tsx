@@ -1,64 +1,209 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useEffect } from "react";
+import ConnectStep from "@/components/ConnectStep";
+import SelectTeamStep from "@/components/SelectTeamStep";
+import BrowseStep, { type BrowseData, type Selection } from "@/components/BrowseStep";
+import ConfigureStep, { type MappingConfig, type LinearData } from "@/components/ConfigureStep";
+import PreviewStep from "@/components/PreviewStep";
+import ExecuteStep from "@/components/ExecuteStep";
+import type { ShortcutGroup } from "@/lib/shortcut";
+
+type Step = "connect" | "team" | "browse" | "configure" | "preview" | "execute";
+
+const STEPS: { id: Step; label: string }[] = [
+  { id: "connect", label: "Connect" },
+  { id: "team", label: "Select team" },
+  { id: "browse", label: "Browse & select" },
+  { id: "configure", label: "Configure" },
+  { id: "preview", label: "Preview" },
+  { id: "execute", label: "Migrate" },
+];
+
+function StepIndicator({ current }: { current: Step }) {
+  const currentIndex = STEPS.findIndex((s) => s.id === current);
+  return (
+    <nav className="flex items-center gap-0">
+      {STEPS.map((step, i) => {
+        const done = i < currentIndex;
+        const active = step.id === current;
+        return (
+          <div key={step.id} className="flex items-center">
+            <div
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium ${
+                active
+                  ? "bg-blue-600 text-white"
+                  : done
+                  ? "text-blue-600"
+                  : "text-gray-400"
+              }`}
+            >
+              <span
+                className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold ${
+                  active
+                    ? "bg-white text-blue-600"
+                    : done
+                    ? "bg-blue-100 text-blue-600"
+                    : "bg-gray-200 text-gray-500"
+                }`}
+              >
+                {done ? "✓" : i + 1}
+              </span>
+              {step.label}
+            </div>
+            {i < STEPS.length - 1 && (
+              <div
+                className={`h-px w-4 ${done || active ? "bg-blue-300" : "bg-gray-200"}`}
+              />
+            )}
+          </div>
+        );
+      })}
+    </nav>
+  );
+}
 
 export default function Home() {
+  const [step, setStep] = useState<Step>("connect");
+
+  // Credentials — empty string means "use env var on the server"
+  const [shortcutToken, setShortcutToken] = useState("");
+  const [linearToken, setLinearToken] = useState("");
+
+  // On mount: check if tokens are pre-configured via env vars
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then(({ shortcutConfigured, linearConfigured }) => {
+        if (shortcutConfigured && linearConfigured) {
+          // Both tokens available server-side — skip the Connect step
+          setStep("team");
+        }
+      })
+      .catch(() => {
+        // If config check fails, just stay on Connect step
+      });
+  }, []);
+
+  // Data
+  const [selectedGroup, setSelectedGroup] = useState<ShortcutGroup | null>(null);
+  const [browseData, setBrowseData] = useState<BrowseData | null>(null);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [mapping, setMapping] = useState<MappingConfig | null>(null);
+  const [linearData, setLinearData] = useState<LinearData | null>(null);
+
+  function handleConnect(sc: string, lin: string) {
+    setShortcutToken(sc);
+    setLinearToken(lin);
+    setStep("team");
+  }
+
+  function handleSelectGroup(group: ShortcutGroup) {
+    setSelectedGroup(group);
+    setBrowseData(null);
+    setSelection(null);
+    setStep("browse");
+  }
+
+  function handleBrowseNext(data: BrowseData, sel: Selection) {
+    setBrowseData(data);
+    setSelection(sel);
+    setStep("configure");
+  }
+
+  function handleConfigureNext(cfg: MappingConfig, ld: LinearData) {
+    setMapping(cfg);
+    setLinearData(ld);
+    setStep("preview");
+  }
+
+  function handleStartOver() {
+    setSelectedGroup(null);
+    setBrowseData(null);
+    setSelection(null);
+    setMapping(null);
+    setLinearData(null);
+    setStep("team");
+  }
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white border-b border-gray-200 px-6 py-4">
+        <div className="mx-auto max-w-5xl flex items-center justify-between">
+          <div>
+            <h1 className="text-base font-semibold text-gray-900">
+              Shortcut → Linear Migration
+            </h1>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Granular, phased migration with full control
+            </p>
+          </div>
+          <StepIndicator current={step} />
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+      </header>
+
+      {/* Main content */}
+      <main className="mx-auto max-w-5xl px-6 py-8">
+        {step === "connect" && <ConnectStep onConnect={handleConnect} />}
+
+        {step === "team" && (
+          <SelectTeamStep
+            shortcutToken={shortcutToken}
+            onSelect={handleSelectGroup}
+            onBack={() => setStep("connect")}
+          />
+        )}
+
+        {step === "browse" && selectedGroup && (
+          <BrowseStep
+            shortcutToken={shortcutToken}
+            selectedGroup={selectedGroup}
+            onNext={handleBrowseNext}
+            onBack={() => setStep("team")}
+          />
+        )}
+
+        {step === "configure" && browseData && selection && (
+          <ConfigureStep
+            linearToken={linearToken}
+            browseData={browseData}
+            selection={selection}
+            onNext={handleConfigureNext}
+            onBack={() => setStep("browse")}
+          />
+        )}
+
+        {step === "preview" &&
+          browseData &&
+          selection &&
+          mapping &&
+          linearData && (
+            <PreviewStep
+              browseData={browseData}
+              selection={selection}
+              mapping={mapping}
+              linearData={linearData}
+              onConfirm={() => setStep("execute")}
+              onBack={() => setStep("configure")}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+          )}
+
+        {step === "execute" &&
+          browseData &&
+          selection &&
+          mapping &&
+          linearData && (
+            <ExecuteStep
+              shortcutToken={shortcutToken}
+              linearToken={linearToken}
+              browseData={browseData}
+              selection={selection}
+              mapping={mapping}
+              linearData={linearData}
+              onStartOver={handleStartOver}
+            />
+          )}
       </main>
     </div>
   );
