@@ -244,6 +244,52 @@ export const CREATE_ISSUE_RELATION_MUTATION = `
   }
 `;
 
+// Workspace-wide projects query — used in BrowseStep to detect already-migrated epics
+export const ALL_PROJECTS_QUERY = `
+  query {
+    projects(first: 250) {
+      nodes {
+        id
+        name
+      }
+    }
+  }
+`;
+
+// Workspace-wide initiatives query — used in BrowseStep to detect already-migrated milestones
+export const ALL_INITIATIVES_QUERY = `
+  query {
+    initiatives(first: 250) {
+      nodes {
+        id
+        name
+      }
+    }
+  }
+`;
+
+// Issues that have a Shortcut backlink attachment — paginated, used to detect migrated stories.
+// Filtered server-side so we only pull issues that were actually migrated from Shortcut.
+export const MIGRATED_ISSUES_QUERY = `
+  query MigratedIssues($cursor: String) {
+    issues(
+      first: 250
+      after: $cursor
+      filter: { attachments: { url: { contains: "app.shortcut.com" } } }
+    ) {
+      nodes {
+        attachments {
+          nodes { url }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`;
+
 // Creates a rich attachment (external link) on a Linear Issue
 export const CREATE_ATTACHMENT_MUTATION = `
   mutation CreateAttachment($input: AttachmentCreateInput!) {

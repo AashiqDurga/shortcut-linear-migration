@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { shortcutRequest } from "@/lib/api";
+import { useEffect, useState, useCallback, type ReactNode } from "react";
+import { shortcutRequest, linearRequest } from "@/lib/api";
+import { ALL_PROJECTS_QUERY, ALL_INITIATIVES_QUERY, MIGRATED_ISSUES_QUERY } from "@/lib/linear";
 import type {
   ShortcutGroup,
   ShortcutMilestone,
@@ -30,6 +31,7 @@ export interface Selection {
 
 interface Props {
   shortcutToken: string;
+  linearToken: string;
   selectedGroup: ShortcutGroup;
   onNext: (data: BrowseData, selection: Selection) => void;
   onBack: () => void;
@@ -55,12 +57,14 @@ function CheckboxRow({
   onChange,
   label,
   sub,
+  badge,
 }: {
   checked: boolean;
   indeterminate?: boolean;
   onChange: () => void;
   label: string;
   sub?: string;
+  badge?: ReactNode;
 }) {
   return (
     <label className="flex items-start gap-3 px-3 py-2 hover:bg-gray-50 rounded cursor-pointer">
@@ -75,7 +79,12 @@ function CheckboxRow({
       />
       <div className="min-w-0">
         <div className="text-sm text-gray-900 truncate">{label}</div>
-        {sub && <div className="text-xs text-gray-400 truncate">{sub}</div>}
+        {(sub || badge) && (
+          <div className="flex items-center gap-2 flex-wrap">
+            {sub && <span className="text-xs text-gray-400 truncate">{sub}</span>}
+            {badge}
+          </div>
+        )}
       </div>
     </label>
   );
@@ -88,6 +97,7 @@ function Section<T>({
   getId,
   getLabel,
   getSub,
+  getBadge,
   filter,
   onFilter,
   onToggle,
@@ -99,6 +109,7 @@ function Section<T>({
   getId: (item: T) => number;
   getLabel: (item: T) => string;
   getSub?: (item: T) => string;
+  getBadge?: (item: T) => ReactNode;
   filter: Filter;
   onFilter: (f: Filter) => void;
   onToggle: (id: number) => void;
@@ -165,6 +176,7 @@ function Section<T>({
               onChange={() => onToggle(getId(item))}
               label={getLabel(item)}
               sub={getSub?.(item)}
+              badge={getBadge?.(item)}
             />
           ))
         )}
@@ -175,6 +187,7 @@ function Section<T>({
 
 export default function BrowseStep({
   shortcutToken,
+  linearToken,
   selectedGroup,
   onNext,
   onBack,
@@ -183,6 +196,10 @@ export default function BrowseStep({
   const [loading, setLoading] = useState(true);
   const [loadingMsg, setLoadingMsg] = useState("Fetching data…");
   const [error, setError] = useState("");
+  // Sets of already-migrated names/IDs — populated by querying Linear in the background
+  const [migratedProjects, setMigratedProjects] = useState<Set<string>>(new Set());
+  const [migratedInitiatives, setMigratedInitiatives] = useState<Set<string>>(new Set());
+  const [migratedStoryIds, setMigratedStoryIds] = useState<Set<number>>(new Set());
 
   const [selectedMilestoneIds, setSelectedMilestoneIds] = useState<Set<number>>(new Set());
   const [selectedEpicIds, setSelectedEpicIds] = useState<Set<number>>(new Set());
@@ -265,12 +282,64 @@ export default function BrowseStep({
         members,
         workflows,
       });
+
+      // Check Linear for already-migrated items — 3 batch queries, not per-item:
+      //   1. ALL_PROJECTS_QUERY     — one call for all project names
+      //   2. ALL_INITIATIVES_QUERY  — one call for all initiative names
+      //   3. MIGRATED_ISSUES_QUERY  — paginated, filtered to issues WITH Shortcut attachments only
+      {
+        setLoadingMsg("Checking migration status…");
+
+        // 1 & 2: projects + initiatives in parallel
+        const [projResult, initResult] = await Promise.allSettled([
+          linearRequest<{ projects: { nodes: Array<{ name: string }> } }>(
+            linearToken, ALL_PROJECTS_QUERY
+          ),
+          linearRequest<{ initiatives: { nodes: Array<{ name: string }> } }>(
+            linearToken, ALL_INITIATIVES_QUERY
+          ),
+        ]);
+        if (projResult.status === "fulfilled") {
+          setMigratedProjects(new Set(projResult.value.projects.nodes.map((p) => p.name.toLowerCase())));
+        }
+        if (initResult.status === "fulfilled") {
+          setMigratedInitiatives(new Set(initResult.value.initiatives.nodes.map((i) => i.name.toLowerCase())));
+        }
+
+        // 3: paginated issues filtered to Shortcut backlinks (only migrated issues come back)
+        try {
+          const storyIds = new Set<number>();
+          let cursor: string | undefined;
+          let pages = 0;
+          do {
+            const issueData = await linearRequest<{
+              issues: {
+                nodes: Array<{ attachments: { nodes: Array<{ url: string }> } }>;
+                pageInfo: { hasNextPage: boolean; endCursor: string };
+              };
+            }>(linearToken, MIGRATED_ISSUES_QUERY, cursor ? { cursor } : {});
+            for (const issue of issueData.issues.nodes) {
+              for (const att of issue.attachments.nodes) {
+                const match = att.url.match(/app\.shortcut\.com\/[^/]+\/story\/(\d+)/);
+                if (match) storyIds.add(parseInt(match[1], 10));
+              }
+            }
+            cursor = issueData.issues.pageInfo.hasNextPage
+              ? issueData.issues.pageInfo.endCursor
+              : undefined;
+            pages++;
+          } while (cursor && pages < 10); // cap at 10 pages / 2500 issues
+          setMigratedStoryIds(storyIds);
+        } catch (err) {
+          console.warn("[browse] Could not fetch migrated issues:", err);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load data.");
     } finally {
       setLoading(false);
     }
-  }, [shortcutToken, selectedGroup]);
+  }, [shortcutToken, linearToken, selectedGroup]);
 
   useEffect(() => {
     fetchData();
@@ -306,6 +375,14 @@ export default function BrowseStep({
   const stateMap = Object.fromEntries(
     data.workflows.flatMap((w) => w.states.map((s) => [s.id, s.name]))
   );
+
+  // Compute story counts per epic from the locally fetched stories
+  const epicStoryCount: Record<number, number> = {};
+  for (const story of data.stories) {
+    if (story.epic_id !== null) {
+      epicStoryCount[story.epic_id] = (epicStoryCount[story.epic_id] ?? 0) + 1;
+    }
+  }
 
   // Filter stories
   const filteredStories = data.stories.filter((s) => {
@@ -424,6 +501,13 @@ export default function BrowseStep({
         getId={(m) => m.id}
         getLabel={(m) => m.name}
         getSub={(m) => `${m.state}${m.description ? " · " + m.description.slice(0, 60) : ""}`}
+        getBadge={(m) =>
+          migratedInitiatives.has(m.name.toLowerCase()) ? (
+            <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-green-50 border border-green-200 px-1.5 py-0.5 text-xs text-green-700 font-medium">
+              ✓ in Linear
+            </span>
+          ) : undefined
+        }
         filter={milestoneFilter}
         onFilter={setMilestoneFilter}
         onToggle={toggleMilestone}
@@ -437,7 +521,18 @@ export default function BrowseStep({
         selectedIds={selectedEpicIds}
         getId={(e) => e.id}
         getLabel={(e) => e.name}
-        getSub={(e) => `${e.state} · ${e.stats?.num_stories ?? 0} stories`}
+        getSub={(e) => {
+          const n = epicStoryCount[e.id] ?? 0;
+          return `${e.state} · ${n} ${n === 1 ? "story" : "stories"}`;
+        }}
+        getBadge={(e) => {
+          if (!migratedProjects.has(e.name.toLowerCase())) return undefined;
+          return (
+            <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-green-50 border border-green-200 px-1.5 py-0.5 text-xs text-green-700 font-medium">
+              ✓ in Linear
+            </span>
+          );
+        }}
         filter={epicFilter}
         onFilter={setEpicFilter}
         onToggle={toggleEpic}
@@ -536,7 +631,7 @@ export default function BrowseStep({
                     </span>
                     <span className="text-sm text-gray-900 truncate">{story.name}</span>
                   </div>
-                  <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-400">
+                  <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-400 flex-wrap">
                     <span>#{story.id}</span>
                     <span>{stateMap[story.workflow_state_id] ?? "Unknown"}</span>
                     {story.owner_ids[0] && (
@@ -545,6 +640,11 @@ export default function BrowseStep({
                     {story.estimate != null && <span>{story.estimate} pts</span>}
                     {story.num_comments > 0 && (
                       <span>{story.num_comments} comments</span>
+                    )}
+                    {migratedStoryIds.has(story.id) && (
+                      <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-green-50 border border-green-200 px-1.5 py-0.5 text-xs text-green-700 font-medium">
+                        ✓ in Linear
+                      </span>
                     )}
                   </div>
                 </div>

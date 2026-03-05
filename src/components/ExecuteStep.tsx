@@ -722,7 +722,7 @@ export default function ExecuteStep({
           );
           for (const comment of comments) {
             try {
-              let commentBody = buildCommentBody(comment, scMemberNameMap);
+              let commentBody = await migrateInlineImages(buildCommentBody(comment, scMemberNameMap), shortcutToken, linearToken);
               // Upload image files to Linear CDN and embed inline; other files as links.
               for (const file of comment.files ?? []) {
                 try {

@@ -158,6 +158,7 @@ export default function Home() {
         {step === "browse" && selectedGroup && (
           <BrowseStep
             shortcutToken={shortcutToken}
+            linearToken={linearToken}
             selectedGroup={selectedGroup}
             onNext={handleBrowseNext}
             onBack={() => setStep("team")}
