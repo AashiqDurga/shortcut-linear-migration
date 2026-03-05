@@ -24,6 +24,16 @@ import type {
   LinearProject,
   LinearIssue,
 } from "@/lib/linear";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type { ShortcutComment, ShortcutPullRequest } from "@/lib/shortcut";
 import type { BrowseData, Selection } from "./BrowseStep";
 import type { MappingConfig, LinearData } from "./ConfigureStep";
@@ -124,7 +134,9 @@ async function migrateInlineImages(text: string, shortcutToken: string, linearTo
       });
       if (uploadRes.ok) {
         const { assetUrl } = await uploadRes.json();
-        result = result.replace(fullMatch, `![${alt}](${assetUrl})`);
+        // Use original alt if descriptive, otherwise fall back to the filename
+        const displayAlt = alt.trim() || rawFilename;
+        result = result.replace(fullMatch, `![${displayAlt}](${assetUrl})`);
       }
     } catch {
       // Leave original URL on failure
@@ -185,31 +197,15 @@ function buildCommentBody(
 
 function StatusBadge({ status }: { status: MigrationResult["status"] }) {
   if (status === "success") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
-        ✓ Created
-      </span>
-    );
+    return <Badge variant="outline" className="border-green-200 bg-green-50 text-green-700">✓ Created</Badge>;
   }
   if (status === "error") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
-        ✗ Error
-      </span>
-    );
+    return <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">✗ Error</Badge>;
   }
   if (status === "reused") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600">
-        ↩ Reused
-      </span>
-    );
+    return <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">↩ Reused</Badge>;
   }
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
-      Skipped
-    </span>
-  );
+  return <Badge variant="secondary">Skipped</Badge>;
 }
 
 export default function ExecuteStep({
@@ -734,7 +730,8 @@ export default function ExecuteStep({
                   if (uploadRes.ok) {
                     const { assetUrl } = await uploadRes.json();
                     if (file.content_type.startsWith("image/")) {
-                      commentBody += `\n\n![${file.name}](${assetUrl})`;
+                      // Caption below so the filename is visible in the rendered ticket
+                      commentBody += `\n\n![${file.name}](${assetUrl})\n*${file.name}*`;
                     } else {
                       await linearRequest(linearToken, CREATE_ATTACHMENT_MUTATION, {
                         input: { issueId: issue.id, title: file.name, subtitle: `From comment · ${file.content_type}`, url: assetUrl },
@@ -965,52 +962,41 @@ export default function ExecuteStep({
 
       {/* Results table */}
       {results.length > 0 && (
-        <div className="rounded-lg border border-gray-200 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-4 py-2 text-left font-medium text-gray-600">Type</th>
-                <th className="px-4 py-2 text-left font-medium text-gray-600">Name</th>
-                <th className="px-4 py-2 text-left font-medium text-gray-600">Status</th>
-                <th className="px-4 py-2 text-left font-medium text-gray-600">Linear</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
+        <div className="rounded-lg border overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Type</TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Linear</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {results.map((r, i) => (
-                <tr key={i} className={r.status === "error" ? "bg-red-50" : ""}>
-                  <td className="px-4 py-2 text-gray-500 capitalize">{r.type}</td>
-                  <td className="px-4 py-2 text-gray-900 truncate max-w-xs">{r.sourceName}</td>
-                  <td className="px-4 py-2">
-                    <StatusBadge status={r.status} />
-                  </td>
-                  <td className="px-4 py-2">
+                <TableRow key={i} className={r.status === "error" ? "bg-destructive/5" : ""}>
+                  <TableCell className="text-muted-foreground capitalize">{r.type}</TableCell>
+                  <TableCell className="max-w-xs truncate">{r.sourceName}</TableCell>
+                  <TableCell><StatusBadge status={r.status} /></TableCell>
+                  <TableCell>
                     {r.linearUrl ? (
-                      <a
-                        href={r.linearUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:underline text-xs"
-                      >
+                      <a href={r.linearUrl} target="_blank" rel="noopener noreferrer"
+                        className="text-primary hover:underline text-xs">
                         Open ↗
                       </a>
                     ) : r.error ? (
-                      <span className="text-xs text-red-500">{r.error}</span>
+                      <span className="text-xs text-destructive">{r.error}</span>
                     ) : null}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
 
       {done && (
-        <button
-          onClick={onStartOver}
-          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-        >
-          ← Migrate more
-        </button>
+        <Button variant="outline" onClick={onStartOver}>← Migrate more</Button>
       )}
     </div>
   );

@@ -269,16 +269,17 @@ export const ALL_INITIATIVES_QUERY = `
 `;
 
 // Issues that have a Shortcut backlink attachment — paginated, used to detect migrated stories.
-// Filtered server-side so we only pull issues that were actually migrated from Shortcut.
+// Uses startsWith (not contains) as Linear's StringComparator may not support contains on URL.
+// attachments requires first: N — connection fields need pagination args in Linear's schema.
 export const MIGRATED_ISSUES_QUERY = `
   query MigratedIssues($cursor: String) {
     issues(
       first: 250
       after: $cursor
-      filter: { attachments: { url: { contains: "app.shortcut.com" } } }
+      filter: { attachments: { url: { startsWith: "https://app.shortcut.com/" } } }
     ) {
       nodes {
-        attachments {
+        attachments(first: 10) {
           nodes { url }
         }
       }

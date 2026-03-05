@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { shortcutRequest, linearRequest } from "@/lib/api";
 import { TEAMS_QUERY } from "@/lib/linear";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import type { ShortcutGroup } from "@/lib/shortcut";
 import type { LinearTeam } from "@/lib/linear";
 
@@ -18,6 +21,7 @@ export default function SelectTeamStep({ shortcutToken, linearToken, onSelect, o
   const [linearTeamNames, setLinearTeamNames] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     Promise.all([
@@ -37,15 +41,15 @@ export default function SelectTeamStep({ shortcutToken, linearToken, onSelect, o
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
-        <span className="ml-3 text-sm text-gray-500">Loading teams…</span>
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <span className="ml-3 text-sm text-muted-foreground">Loading teams…</span>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+      <div className="rounded-lg bg-destructive/10 border border-destructive/20 px-4 py-3 text-sm text-destructive">
         {error}
       </div>
     );
@@ -54,38 +58,48 @@ export default function SelectTeamStep({ shortcutToken, linearToken, onSelect, o
   return (
     <div>
       <div className="mb-6">
-        <h2 className="text-2xl font-semibold text-gray-900">Select a Shortcut team</h2>
-        <p className="mt-1 text-sm text-gray-500">
-          Choose which team's data to migrate. {groups.length} team{groups.length !== 1 ? "s" : ""} found.
+        <h2 className="text-2xl font-semibold">Select a Shortcut team</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Choose which team&apos;s data to migrate. {groups.length} team{groups.length !== 1 ? "s" : ""} found.
         </p>
       </div>
 
+      <Input
+        placeholder="Search teams…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="mb-4"
+        autoFocus
+      />
+
       <div className="space-y-2 mb-6">
-        {groups.map((group) => (
+        {groups.filter((g) => g.name.toLowerCase().includes(search.toLowerCase())).map((group) => (
           <button
             key={group.id}
             onClick={() => onSelect(group)}
-            className="w-full rounded-lg border border-gray-200 bg-white px-4 py-4 text-left hover:border-blue-400 hover:bg-blue-50 transition-colors group"
+            className="w-full rounded-lg border bg-card px-4 py-4 text-left hover:border-primary/50 hover:bg-accent transition-colors group"
           >
             <div className="flex items-center justify-between">
-              <div>
-                <div className="font-medium text-gray-900 group-hover:text-blue-700">
+              <div className="min-w-0">
+                <div className="font-medium group-hover:text-primary truncate">
                   {group.name}
                 </div>
                 {group.description && (
-                  <div className="mt-0.5 text-sm text-gray-400 line-clamp-1">
+                  <div className="mt-0.5 text-sm text-muted-foreground line-clamp-1">
                     {group.description}
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-3 text-xs text-gray-400 shrink-0 ml-4">
-                <span>{group.num_stories ?? "?"} stories</span>
+              <div className="flex items-center gap-2 shrink-0 ml-4">
+                <span className="text-xs text-muted-foreground">
+                  {group.num_stories ?? "?"} stories
+                </span>
                 {linearTeamNames.has(group.name.toLowerCase()) && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-green-50 border border-green-200 px-1.5 py-0.5 text-xs text-green-700 font-medium">
+                  <Badge variant="outline" className="border-green-200 bg-green-50 text-green-700 text-xs">
                     ✓ team in Linear
-                  </span>
+                  </Badge>
                 )}
-                <svg className="h-4 w-4 text-gray-300 group-hover:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
               </div>
@@ -94,9 +108,9 @@ export default function SelectTeamStep({ shortcutToken, linearToken, onSelect, o
         ))}
       </div>
 
-      <button onClick={onBack} className="text-sm text-gray-500 hover:text-gray-700">
+      <Button variant="ghost" size="sm" onClick={onBack}>
         ← Back
-      </button>
+      </Button>
     </div>
   );
 }
