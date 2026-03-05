@@ -12,29 +12,36 @@ It was built because the native Linear import options didn't cover enough of the
 
 ---
 
-## Why does this exist? How is it different from Linear's built-in import?
+## How is this different from Linear's native Shortcut importer?
 
-| Feature | Linear CSV import | Linear CLI | This tool |
-|---|---|---|---|
-| Stories → Issues | ✓ | ✓ | ✓ |
-| Epics → Projects | — | — | ✓ |
-| Milestones → Initiatives | — | — | ✓ |
-| Iterations → Cycles | — | — | ✓ |
-| Inline images re-hosted to Linear CDN | — | — | ✓ |
-| Comment files uploaded to Linear CDN | — | — | ✓ |
-| Story comments (with author + date) | — | — | ✓ |
-| GitHub PR attachments | — | — | ✓ |
-| Story file attachments | — | — | ✓ |
-| Linked files (Google Drive, Dropbox, etc.) | — | — | ✓ |
-| Story relations (blocks, duplicates, relates to) | — | — | ✓ |
-| Story type labels (feature / bug / chore) | — | — | ✓ |
-| Shortcut labels preserved as Linear labels | — | — | ✓ |
-| Shortcut backlink attached to every issue | — | — | ✓ |
-| Assignee mapping by email | — | — | ✓ |
-| Workflow state mapping (per team) | — | — | ✓ |
-| Member mapping (Shortcut → Linear user) | — | — | ✓ |
-| Skip already-migrated items on re-run | — | — | ✓ |
-| "✓ in Linear" status badges in browse view | — | — | ✓ |
+Linear has a [built-in Shortcut importer](https://linear.app/docs/import) that covers the core fields well. This tool was built to handle the things it doesn't.
+
+| Feature | Linear importer | This tool |
+|---|---|---|
+| Stories → Issues | ✓ | ✓ |
+| Title, description | ✓ | ✓ |
+| Tasks → appended to description | ✓ | ✓ |
+| External tickets → appended to description | ✓ | ✓ |
+| State mapping | ✓ auto | ✓ manual (you control it) |
+| Story type → label | ✓ | ✓ |
+| Tags → labels | ✓ | ✓ |
+| First owner → assignee | ✓ | ✓ |
+| Comments | ✓ | ✓ with author name + original date |
+| Estimate | ✓ | ✓ |
+| Due date | ✓ | — |
+| Priority | ✓ | — |
+| Epics → Projects | ✓ | ✓ |
+| **Milestones → Initiatives** | — | ✓ |
+| **Iterations → Cycles** | — | ✓ |
+| **Inline images re-hosted to Linear CDN** | — | ✓ |
+| **Story file attachments uploaded to Linear CDN** | — | ✓ |
+| **Comment file attachments uploaded to Linear CDN** | — | ✓ |
+| **GitHub PR links as Linear attachments** | — | ✓ |
+| **Linked files (Google Drive, Dropbox, etc.)** | — | ✓ |
+| **Story relations (blocks / duplicates / relates to)** | — | ✓ |
+| **Shortcut backlink on every issue** | — | ✓ |
+
+If the native importer covers what you need, use it — it's more battle-tested. This tool exists for teams that need the bolded items above.
 
 ---
 
