@@ -145,6 +145,9 @@ export interface ShortcutStory {
   id: number;
   name: string;
   archived: boolean;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
   description: string;
   story_type: "feature" | "bug" | "chore";
   workflow_state_id: number;

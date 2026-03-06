@@ -779,6 +779,8 @@ export default function ExecuteStep({
           estimate: safeEstimate,
           projectId: projectId || undefined,
           cycleId: cycleId || undefined,
+          createdAt: story.created_at || undefined,
+          completedAt: story.completed_at || undefined,
         };
         const noEstimateInput = { ...fullInput, estimate: undefined };
         const minimalInput = {
@@ -787,6 +789,8 @@ export default function ExecuteStep({
           labelIds: issueLabelIds.length > 0 ? issueLabelIds : undefined,
           projectId: projectId || undefined,
           cycleId: cycleId || undefined,
+          createdAt: story.created_at || undefined,
+          completedAt: story.completed_at || undefined,
         };
 
         type IssueCreateResult = { issueCreate: { success: boolean; issue: LinearIssue } };
