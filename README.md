@@ -49,7 +49,7 @@ If the native importer covers what you need, use it — it's more battle-tested.
 
 1. **Connect** — enter your Shortcut and Linear API tokens (stored in memory only, never persisted)
 2. **Select team** — pick the Shortcut team to migrate; see which teams already exist in Linear
-3. **Browse & select** — choose which milestones, epics, iterations, and stories to include; items already in Linear are badged
+3. **Browse & select** — choose which milestones, epics, iterations, and stories to include; stories without an epic are shown in a "No epic" section and migrate to Linear without a project; items already in Linear are badged
 4. **Configure mapping** — pick the target Linear team, map Shortcut workflow states to Linear statuses, and map Shortcut members to Linear users
 5. **Preview** — review counts and spot-check the mapping before anything is written
 6. **Run** — migration executes with a live log and results table; transient API errors are retried automatically; field validation failures fall back to progressively simpler payloads so issues are always created
@@ -78,6 +78,7 @@ The tool is safe to run multiple times against the same team. On each run:
 - Tested on a migration of ~1,000 items (stories, epics, milestones, iterations). Larger datasets may hit Linear API rate limits.
 - De-duplication on re-run relies on Shortcut backlink attachments being created successfully. If attachment creation fails for an issue, it may be created again on re-run.
 - Linear has an 80-character limit on project and initiative names — long names are truncated with `…` and the full name is prepended to the description.
+- Stories without an epic are migrated to Linear without a project assignment.
 - Only the first Shortcut story owner becomes the Linear assignee.
 - Story estimates are only migrated if they are positive integers that match the Linear team's estimate scale.
 
