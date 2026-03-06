@@ -7,7 +7,7 @@ import BrowseStep, { type BrowseData, type Selection } from "@/components/Browse
 import ConfigureStep, { type MappingConfig, type LinearData } from "@/components/ConfigureStep";
 import PreviewStep from "@/components/PreviewStep";
 import ExecuteStep from "@/components/ExecuteStep";
-import FixArchivedStep from "@/components/FixArchivedStep";
+import FixStep from "@/components/FixStep";
 import type { ShortcutGroup } from "@/lib/shortcut";
 
 type Step = "connect" | "team" | "browse" | "configure" | "preview" | "execute" | "fix-archived";
@@ -146,7 +146,7 @@ export default function Home() {
             </p>
           </div>
           {step === "fix-archived"
-            ? <span className="text-sm font-medium text-blue-600">Fix archived stories</span>
+            ? <span className="text-sm font-medium text-blue-600">Fix &amp; sync</span>
             : <StepIndicator current={step} />
           }
         </div>
@@ -202,7 +202,7 @@ export default function Home() {
           )}
 
         {step === "fix-archived" && selectedGroup && (
-          <FixArchivedStep
+          <FixStep
             shortcutToken={shortcutToken}
             linearToken={linearToken}
             selectedGroup={selectedGroup}
