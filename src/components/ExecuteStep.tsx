@@ -16,6 +16,9 @@ import {
   LINK_INITIATIVE_PROJECT_MUTATION,
   CREATE_ATTACHMENT_MUTATION,
   CREATE_ISSUE_RELATION_MUTATION,
+  UPDATE_ISSUE_MUTATION,
+  UPDATE_PROJECT_MUTATION,
+  UPDATE_INITIATIVE_MUTATION,
 } from "@/lib/linear";
 import type {
   LinearLabel,
@@ -42,7 +45,7 @@ export interface MigrationResult {
   type: "label" | "initiative" | "cycle" | "project" | "issue";
   sourceId: string | number;
   sourceName: string;
-  status: "success" | "error" | "skipped" | "reused";
+  status: "success" | "error" | "skipped" | "reused" | "updated";
   linearId?: string;
   linearUrl?: string;
   error?: string;
@@ -205,6 +208,9 @@ function StatusBadge({ status }: { status: MigrationResult["status"] }) {
   }
   if (status === "reused") {
     return <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">↩ Reused</Badge>;
+  }
+  if (status === "updated") {
+    return <Badge variant="outline" className="border-purple-200 bg-purple-50 text-purple-700">↑ Updated</Badge>;
   }
   return <Badge variant="secondary">Skipped</Badge>;
 }
@@ -400,13 +406,28 @@ export default function ExecuteStep({
 
       if (existing) {
         milestoneToInitiative[milestone.id] = existing;
-        addLog(`  Skipping "${initiativeName}" — already exists.`);
-        addResult({
-          type: "initiative",
-          sourceId: milestone.id,
-          sourceName: milestone.name,
-          status: "skipped",
-        });
+        addLog(`  Updating initiative "${initiativeName}"…`);
+        try {
+          await linearRequest(linearToken, UPDATE_INITIATIVE_MUTATION, {
+            id: existing,
+            input: {
+              name: initiativeName,
+              description: [
+                initiativeName !== milestone.name ? `**Full name:** ${milestone.name}\n` : "",
+                buildInitiativeDescription(milestone),
+              ].filter(Boolean).join("\n") || undefined,
+              targetDate: milestone.completed_at_override
+                ? milestone.completed_at_override.split("T")[0]
+                : undefined,
+              status: shortcutObjectiveStateToLinear(milestone.state),
+            },
+          });
+          addLog(`  ↑ Initiative updated.`);
+          addResult({ type: "initiative", sourceId: milestone.id, sourceName: milestone.name, status: "updated" });
+        } catch (err) {
+          addLog(`  ⚠ Could not update initiative: ${err}`);
+          addResult({ type: "initiative", sourceId: milestone.id, sourceName: milestone.name, status: "skipped" });
+        }
         continue;
       }
       addLog(`  Creating initiative "${initiativeName}"…`);
@@ -531,17 +552,32 @@ export default function ExecuteStep({
       addLog(`\nCreating ${selectedEpics.length} projects…`);
     }
     for (const epic of selectedEpics) {
-      const existingProject = existingProjectsByName[
-        (epic.name.length > 80 ? epic.name.slice(0, 77) + "…" : epic.name).toLowerCase()
-      ] ?? null;
+      const projectName = epic.name.length > 80 ? epic.name.slice(0, 77) + "…" : epic.name;
+      const existingProject = existingProjectsByName[projectName.toLowerCase()] ?? null;
       if (existingProject) {
         epicToProject[epic.id] = existingProject.id;
-        addLog(`  Skipping "${epic.name}" — already exists.`);
-        addResult({ type: "project", sourceId: epic.id, sourceName: epic.name, status: "skipped", linearId: existingProject.id, linearUrl: existingProject.url });
+        addLog(`  Updating project "${projectName}"…`);
+        try {
+          const projectState = epic.state === "done" || epic.state === "closed" ? "completed" : "started";
+          await linearRequest(linearToken, UPDATE_PROJECT_MUTATION, {
+            id: existingProject.id,
+            input: {
+              name: projectName,
+              description: [
+                projectName !== epic.name ? `**Full name:** ${epic.name}\n` : "",
+                epic.description,
+              ].filter(Boolean).join("\n") || undefined,
+              state: projectState,
+            },
+          });
+          addLog(`  ↑ Project updated.`);
+          addResult({ type: "project", sourceId: epic.id, sourceName: epic.name, status: "updated", linearId: existingProject.id, linearUrl: existingProject.url });
+        } catch (err) {
+          addLog(`  ⚠ Could not update project: ${err}`);
+          addResult({ type: "project", sourceId: epic.id, sourceName: epic.name, status: "skipped", linearId: existingProject.id, linearUrl: existingProject.url });
+        }
         continue;
       }
-      // Linear project names are capped at 80 characters
-      const projectName = epic.name.length > 80 ? epic.name.slice(0, 77) + "…" : epic.name;
       if (projectName !== epic.name) {
         addLog(`  ⚠ Epic name truncated to 80 chars: "${projectName}"`);
       }
@@ -632,8 +668,51 @@ export default function ExecuteStep({
           const existing = check.issues.nodes[0];
           if (existing) {
             storyToIssue[story.id] = existing.id;
-            addLog(`  Skipping #${story.id} "${story.name}" — already migrated as ${existing.identifier}.`);
-            addResult({ type: "issue", sourceId: story.id, sourceName: story.name, status: "skipped", linearId: existing.id, linearUrl: existing.url });
+            addLog(`  Updating #${story.id} "${story.name}" (${existing.identifier})…`);
+            try {
+              // Fetch full story so description/tasks are up to date
+              let fullStory = story;
+              try {
+                fullStory = await shortcutRequest<typeof story>(shortcutToken, "GET", `stories/${story.id}`);
+              } catch { /* use slim story */ }
+              if (fullStory.story_links?.length) storyLinksMap[story.id] = fullStory.story_links;
+
+              const rawDesc = buildIssueDescription(fullStory, scMemberNameMap);
+              const description = await migrateInlineImages(rawDesc, shortcutToken, linearToken);
+              const linearStateId = stateMap[String(story.workflow_state_id)] || undefined;
+              const mappedAssignee = story.owner_ids?.[0] ? memberMap[story.owner_ids[0]] : undefined;
+              const issueLabelIds: string[] = [];
+              const typeLabel = labelNameToId[story.story_type];
+              if (typeLabel) issueLabelIds.push(typeLabel);
+              for (const l of story.labels ?? []) {
+                const lid = labelNameToId[l.name.toLowerCase()];
+                if (lid) issueLabelIds.push(lid);
+              }
+              const safeEstimate = (story.estimate != null && Number.isInteger(story.estimate) && story.estimate > 0)
+                ? story.estimate : undefined;
+              const projectId = story.epic_id ? epicToProject[story.epic_id] : undefined;
+              const cycleId = story.iteration_id ? iterationToCycle[story.iteration_id] : undefined;
+
+              await withRetry(() => linearRequest(linearToken, UPDATE_ISSUE_MUTATION, {
+                id: existing.id,
+                input: {
+                  title: story.name,
+                  description,
+                  stateId: linearStateId,
+                  assigneeId: mappedAssignee || undefined,
+                  labelIds: issueLabelIds.length > 0 ? issueLabelIds : undefined,
+                  estimate: safeEstimate,
+                  projectId: projectId || undefined,
+                  cycleId: cycleId || undefined,
+                },
+              }), { label: `update issue #${story.id}` });
+
+              addLog(`  ↑ Issue updated.`);
+              addResult({ type: "issue", sourceId: story.id, sourceName: story.name, status: "updated", linearId: existing.id, linearUrl: existing.url });
+            } catch (err) {
+              addLog(`  ⚠ Could not update issue: ${err}`);
+              addResult({ type: "issue", sourceId: story.id, sourceName: story.name, status: "skipped", linearId: existing.id, linearUrl: existing.url });
+            }
             continue;
           }
         } catch { /* non-fatal — proceed with creation */ }

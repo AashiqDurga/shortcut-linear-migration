@@ -291,6 +291,45 @@ export const MIGRATED_ISSUES_QUERY = `
   }
 `;
 
+export const UPDATE_ISSUE_MUTATION = `
+  mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
+    issueUpdate(id: $id, input: $input) {
+      success
+      issue {
+        id
+        identifier
+        title
+        url
+      }
+    }
+  }
+`;
+
+export const UPDATE_PROJECT_MUTATION = `
+  mutation UpdateProject($id: String!, $input: ProjectUpdateInput!) {
+    projectUpdate(id: $id, input: $input) {
+      success
+      project {
+        id
+        name
+        url
+      }
+    }
+  }
+`;
+
+export const UPDATE_INITIATIVE_MUTATION = `
+  mutation UpdateInitiative($id: String!, $input: InitiativeUpdateInput!) {
+    initiativeUpdate(id: $id, input: $input) {
+      success
+      initiative {
+        id
+        name
+      }
+    }
+  }
+`;
+
 // Creates a rich attachment (external link) on a Linear Issue
 export const CREATE_ATTACHMENT_MUTATION = `
   mutation CreateAttachment($input: AttachmentCreateInput!) {

@@ -56,6 +56,23 @@ If the native importer covers what you need, use it — it's more battle-tested.
 
 ---
 
+## Re-running the migration
+
+The tool is safe to run multiple times against the same team. On each run:
+
+| Item | How it's detected | Behaviour |
+|---|---|---|
+| Initiative | Name match in Linear | Core fields updated (name, description, status, target date) |
+| Project | Name match in Linear team | Core fields updated (name, description, state) |
+| Issue | Shortcut backlink attachment on the Linear issue | Core fields updated (title, description, state, assignee, labels, estimate, project, cycle) |
+| Issue with no backlink | Not found | Created fresh |
+
+**What is not updated on re-run:** comments, file attachments, PR links, and story relations are skipped for existing issues — there is no way to deduplicate them and re-running would stack duplicates.
+
+**Edge case:** if an issue was created but its Shortcut backlink attachment failed to save, the tool has no way to detect it and will create a duplicate on re-run.
+
+---
+
 ## Caveats
 
 - Tested on a migration of ~1,000 items (stories, epics, milestones, iterations). Larger datasets may hit Linear API rate limits.
