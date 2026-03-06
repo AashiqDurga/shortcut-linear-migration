@@ -267,17 +267,19 @@ export default function BrowseStep({
         }
       }
 
-      // Fetch stories with no epic for this group
-      setLoadingMsg("Fetching stories without epics…");
+      // Broad catch-all search: finds any team stories missed by the epic scan —
+      // stories in cross-team epics, stories with no epic, etc.
+      // seenIds deduplication ensures no doubles with the epic fetch above.
+      setLoadingMsg("Fetching remaining team stories…");
       try {
-        let noEpicNext: string | null = null;
-        let noEpicPage = 0;
+        let catchNext: string | null = null;
+        let catchPage = 0;
         do {
           const body: Record<string, unknown> = {
-            query: `!has:epic group:${selectedGroup.mention_name}`,
+            query: `group:${selectedGroup.mention_name}`,
             page_size: 25,
           };
-          if (noEpicNext) body.next = noEpicNext;
+          if (catchNext) body.next = catchNext;
           const result = await shortcutRequest<ShortcutSearchResult>(
             shortcutToken, "POST", "search/stories", { body }
           );
@@ -287,11 +289,11 @@ export default function BrowseStep({
               allStories.push(story);
             }
           }
-          noEpicNext = result.next;
-          noEpicPage++;
-        } while (noEpicNext && noEpicPage < 20);
+          catchNext = result.next;
+          catchPage++;
+        } while (catchNext && catchPage < 20);
       } catch (err) {
-        console.warn("[browse] Could not fetch no-epic stories:", err);
+        console.warn("[browse] Could not fetch remaining team stories:", err);
       }
 
       setData({ milestones: groupMilestones, epics: groupEpics, iterations: groupIterations, stories: allStories, members, workflows });
