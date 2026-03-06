@@ -4,10 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { shortcutRequest, linearRequest, delay, withRetry } from "@/lib/api";
 import {
   TEAMS_QUERY,
+  TEAM_PROJECTS_QUERY,
   ISSUE_WITH_STATE_BY_URL_QUERY,
   UPDATE_ISSUE_MUTATION,
+  UPDATE_PROJECT_MUTATION,
   type LinearTeam,
   type LinearIssueWithState,
+  type LinearProject,
 } from "@/lib/linear";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +38,7 @@ import type {
   ShortcutSearchResult,
 } from "@/lib/shortcut";
 
-type Mode = "recent" | "archived";
+type Mode = "recent" | "archived" | "projects";
 type Phase = "configure" | "scanning" | "review" | "updating" | "done";
 
 interface FoundIssue {
@@ -58,6 +61,24 @@ interface UpdateResult {
   storyId: number;
   storyName: string;
   linearIdentifier: string;
+  linearUrl: string;
+  status: "updated" | "skipped" | "not-found" | "error";
+  error?: string;
+}
+
+interface FoundProject {
+  epic: ShortcutEpic;
+  projectName: string;
+  description: string;
+  proposedState: string;
+  linearId: string | null;
+  linearUrl: string | null;
+  currentState: string | null;
+}
+
+interface ProjectUpdateResult {
+  epicName: string;
+  projectName: string;
   linearUrl: string;
   status: "updated" | "skipped" | "not-found" | "error";
   error?: string;
@@ -88,6 +109,11 @@ export default function FixStep({
   const [scanLog, setScanLog] = useState<string[]>([]);
   const [foundIssues, setFoundIssues] = useState<FoundIssue[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  // projects mode
+  const [foundProjects, setFoundProjects] = useState<FoundProject[]>([]);
+  const [selectedProjectIds, setSelectedProjectIds] = useState<Set<number>>(new Set());
+  const [projectUpdateResults, setProjectUpdateResults] = useState<ProjectUpdateResult[]>([]);
 
   const [updateLog, setUpdateLog] = useState<string[]>([]);
   const [updateResults, setUpdateResults] = useState<UpdateResult[]>([]);
@@ -180,6 +206,55 @@ export default function FixStep({
           page++;
         } while (next && page < 20);
         addScanLog(`Found ${stories.length} recently updated stories.`);
+      }
+
+      // Projects mode — separate flow
+      if (mode === "projects") {
+        addScanLog("Fetching epics…");
+        const allEpics = await shortcutRequest<ShortcutEpic[]>(shortcutToken, "GET", "epics");
+        const groupEpics = allEpics.filter((e) => e.group_ids.includes(selectedGroup.id) && !e.archived);
+        addScanLog(`Found ${groupEpics.length} epics. Fetching full descriptions…`);
+
+        addScanLog("Fetching Linear projects for team…");
+        const projData = await linearRequest<{ projects: { nodes: LinearProject[] } }>(
+          linearToken, TEAM_PROJECTS_QUERY, { teamId: targetTeamId }
+        );
+        const projectsByName: Record<string, LinearProject> = {};
+        for (const p of projData.projects.nodes) {
+          projectsByName[p.name.toLowerCase()] = p;
+        }
+
+        const found: FoundProject[] = [];
+        const BATCH = 8;
+        for (let i = 0; i < groupEpics.length; i += BATCH) {
+          const batch = groupEpics.slice(i, i + BATCH);
+          addScanLog(`  Fetching epic batch ${Math.min(i + BATCH, groupEpics.length)}/${groupEpics.length}…`);
+          const fullEpics = await Promise.all(
+            batch.map((e) =>
+              shortcutRequest<ShortcutEpic>(shortcutToken, "GET", `epics/${e.id}`).catch(() => e)
+            )
+          );
+          for (const epic of fullEpics) {
+            const projectName = epic.name.length > 80 ? epic.name.slice(0, 77) + "…" : epic.name;
+            const proposedState = epic.state === "done" || epic.state === "closed" ? "completed" : "started";
+            const match = projectsByName[projectName.toLowerCase()] ?? null;
+            found.push({
+              epic,
+              projectName,
+              description: epic.description ?? "",
+              proposedState,
+              linearId: match?.id ?? null,
+              linearUrl: match?.url ?? null,
+              currentState: null, // not returned by TEAM_PROJECTS_QUERY
+            });
+          }
+        }
+
+        addScanLog(`Done. ${found.filter((f) => f.linearId).length} of ${found.length} epics matched to Linear projects.`);
+        setFoundProjects(found);
+        setSelectedProjectIds(new Set(found.filter((f) => f.linearId).map((f) => f.epic.id)));
+        setPhase("review");
+        return;
       }
 
       if (stories.length === 0) {
@@ -289,6 +364,58 @@ export default function FixStep({
     setPhase("updating");
     setUpdateLog([]);
     setUpdateResults([]);
+    setProjectUpdateResults([]);
+
+    if (mode === "projects") {
+      const toUpdate = foundProjects.filter((p) => selectedProjectIds.has(p.epic.id) && p.linearId);
+      addUpdateLog(`Updating ${toUpdate.length} project${toUpdate.length !== 1 ? "s" : ""}…`);
+      for (const proj of toUpdate) {
+        try {
+          await withRetry(
+            () => linearRequest(linearToken, UPDATE_PROJECT_MUTATION, {
+              id: proj.linearId,
+              input: {
+                name: proj.projectName,
+                description: [
+                  proj.projectName !== proj.epic.name ? `**Full name:** ${proj.epic.name}\n` : "",
+                  proj.description,
+                ].filter(Boolean).join("\n") || undefined,
+                state: proj.proposedState,
+              },
+            }),
+            { label: `update project ${proj.projectName}` }
+          );
+          addUpdateLog(`  ↑ "${proj.projectName}" updated.`);
+          setProjectUpdateResults((prev) => [...prev, {
+            epicName: proj.epic.name,
+            projectName: proj.projectName,
+            linearUrl: proj.linearUrl!,
+            status: "updated",
+          }]);
+        } catch (err) {
+          addUpdateLog(`  ✗ "${proj.projectName}" failed: ${err}`);
+          setProjectUpdateResults((prev) => [...prev, {
+            epicName: proj.epic.name,
+            projectName: proj.projectName,
+            linearUrl: proj.linearUrl!,
+            status: "error",
+            error: String(err),
+          }]);
+        }
+        await delay(150);
+      }
+      for (const proj of foundProjects.filter((p) => !p.linearId)) {
+        setProjectUpdateResults((prev) => [...prev, {
+          epicName: proj.epic.name,
+          projectName: proj.projectName,
+          linearUrl: "",
+          status: "not-found",
+        }]);
+      }
+      addUpdateLog("Done.");
+      setPhase("done");
+      return;
+    }
 
     const team = linearTeams.find((t) => t.id === targetTeamId);
     const cancelledState = team?.states.nodes.find((s) => s.type === "cancelled");
@@ -459,7 +586,7 @@ export default function FixStep({
 
           <div className="space-y-2">
             <label className="text-sm font-semibold">What to fix</label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <button
                 onClick={() => setMode("recent")}
                 className={`rounded-lg border p-4 text-left transition-colors ${
@@ -470,7 +597,20 @@ export default function FixStep({
               >
                 <div className="font-medium text-sm">Recently updated</div>
                 <div className="mt-1 text-xs text-muted-foreground">
-                  Shortcut stories changed in the last 24h — review and re-sync title &amp; state to Linear.
+                  Stories changed in the last 24h — re-sync title &amp; state to Linear.
+                </div>
+              </button>
+              <button
+                onClick={() => setMode("projects")}
+                className={`rounded-lg border p-4 text-left transition-colors ${
+                  mode === "projects"
+                    ? "border-primary bg-primary/5"
+                    : "hover:border-primary/40 hover:bg-accent"
+                }`}
+              >
+                <div className="font-medium text-sm">Sync projects</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Update Linear projects with the latest epic description and status from Shortcut.
                 </div>
               </button>
               <button
@@ -515,8 +655,96 @@ export default function FixStep({
         </div>
       )}
 
-      {/* Review phase */}
-      {phase === "review" && (
+      {/* Review phase — projects mode */}
+      {phase === "review" && mode === "projects" && (
+        <div className="space-y-4">
+          {foundProjects.length === 0 ? (
+            <div className="rounded-lg bg-muted/50 border px-4 py-6 text-center text-sm text-muted-foreground">
+              No epics found for this team.
+            </div>
+          ) : (
+            <>
+              <div className="rounded-lg bg-muted/50 border px-4 py-3 text-sm space-y-1">
+                <p>
+                  <strong>{foundProjects.length}</strong> epics ·{" "}
+                  <strong>{foundProjects.filter((p) => p.linearId).length}</strong> matched to Linear projects ·{" "}
+                  <span className="text-muted-foreground">{foundProjects.filter((p) => !p.linearId).length} not found (skipped)</span>
+                </p>
+              </div>
+              <div className="flex items-center gap-4">
+                <span className="text-sm text-muted-foreground">{selectedProjectIds.size} selected</span>
+                <button
+                  onClick={() => setSelectedProjectIds(new Set(foundProjects.filter((p) => p.linearId).map((p) => p.epic.id)))}
+                  className="text-xs text-primary hover:underline"
+                >Select all</button>
+                <button
+                  onClick={() => setSelectedProjectIds(new Set())}
+                  className="text-xs text-muted-foreground hover:underline"
+                >Select none</button>
+              </div>
+              <div className="rounded-lg border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-8" />
+                      <TableHead>Epic / Project</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead>State</TableHead>
+                      <TableHead>Linear</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {foundProjects.map((proj) => (
+                      <TableRow key={proj.epic.id} className={!proj.linearId ? "opacity-50" : ""}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedProjectIds.has(proj.epic.id)}
+                            disabled={!proj.linearId}
+                            onCheckedChange={() => {
+                              if (!proj.linearId) return;
+                              setSelectedProjectIds((prev) => {
+                                const n = new Set(prev);
+                                n.has(proj.epic.id) ? n.delete(proj.epic.id) : n.add(proj.epic.id);
+                                return n;
+                              });
+                            }}
+                          />
+                        </TableCell>
+                        <TableCell className="max-w-[180px] truncate text-sm font-medium">{proj.projectName}</TableCell>
+                        <TableCell className="max-w-xs text-xs text-muted-foreground truncate">
+                          {proj.description ? proj.description.slice(0, 80) + (proj.description.length > 80 ? "…" : "") : <span className="italic">none</span>}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs">{proj.proposedState}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          {proj.linearId ? (
+                            <a href={proj.linearUrl!} target="_blank" rel="noopener noreferrer"
+                              className="text-primary hover:underline text-xs">↗ open</a>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Not found</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
+          )}
+          <div className="flex items-center justify-between pt-2">
+            <Button variant="ghost" size="sm" onClick={() => { setPhase("configure"); ranRef.current = false; }}>← Re-scan</Button>
+            {foundProjects.length > 0 && (
+              <Button disabled={selectedProjectIds.size === 0} onClick={runUpdate}>
+                Update {selectedProjectIds.size} project{selectedProjectIds.size !== 1 ? "s" : ""}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Review phase — stories mode */}
+      {phase === "review" && mode !== "projects" && (
         <div className="space-y-4">
           {foundIssues.length === 0 ? (
             <div className="rounded-lg bg-muted/50 border px-4 py-6 text-center text-sm text-muted-foreground">
@@ -661,6 +889,37 @@ export default function FixStep({
               </div>
             )}
           </div>
+          {projectUpdateResults.length > 0 && (
+            <div className="rounded-lg border overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Project</TableHead>
+                    <TableHead>Linear</TableHead>
+                    <TableHead>Result</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {projectUpdateResults.map((r, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="max-w-xs truncate text-sm">{r.projectName}</TableCell>
+                      <TableCell>
+                        {r.linearUrl ? (
+                          <a href={r.linearUrl} target="_blank" rel="noopener noreferrer"
+                            className="text-primary hover:underline text-xs">↗ open</a>
+                        ) : "—"}
+                      </TableCell>
+                      <TableCell>
+                        {r.status === "updated" && <Badge variant="outline" className="border-purple-200 bg-purple-50 text-purple-700 text-xs">↑ Updated</Badge>}
+                        {r.status === "not-found" && <Badge variant="secondary" className="text-xs">Not found</Badge>}
+                        {r.status === "error" && <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700 text-xs">✗ Error</Badge>}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
           {updateResults.length > 0 && (
             <div className="rounded-lg border overflow-hidden">
               <Table>

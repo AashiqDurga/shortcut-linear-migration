@@ -552,6 +552,15 @@ export default function ExecuteStep({
       addLog(`\nCreating ${selectedEpics.length} projects…`);
     }
     for (const epic of selectedEpics) {
+      // Fetch full epic individually — the list endpoint returns partial data (no description)
+      let epicDescription = epic.description;
+      try {
+        const fullEpic = await shortcutRequest<{ description: string }>(shortcutToken, "GET", `epics/${epic.id}`);
+        epicDescription = fullEpic.description ?? "";
+      } catch {
+        // fall back to list-endpoint description
+      }
+
       const projectName = epic.name.length > 80 ? epic.name.slice(0, 77) + "…" : epic.name;
       const existingProject = existingProjectsByName[projectName.toLowerCase()] ?? null;
       if (existingProject) {
@@ -565,7 +574,7 @@ export default function ExecuteStep({
               name: projectName,
               description: [
                 projectName !== epic.name ? `**Full name:** ${epic.name}\n` : "",
-                epic.description,
+                epicDescription,
               ].filter(Boolean).join("\n") || undefined,
               state: projectState,
             },
