@@ -407,6 +407,8 @@ export default function BrowseStep({
     data.workflows.flatMap((w) => w.states.map((s) => [s.id, s.name]))
   );
 
+  const teamEpicIds = new Set(data.epics.map((e) => e.id));
+
   const epicStoryCount: Record<number, number> = {};
   for (const story of data.stories) {
     if (story.epic_id !== null) {
@@ -418,7 +420,7 @@ export default function BrowseStep({
 
   const filteredStories = data.stories.filter((s) => {
     if (q && !s.name.toLowerCase().includes(q) && !String(s.id).includes(q)) return false;
-    if (storyFilter === "no-epic") return s.epic_id === null;
+    if (storyFilter === "no-epic") return s.epic_id === null || !teamEpicIds.has(s.epic_id);
     if (storyFilter === "all") return true;
     const stateName = stateMap[s.workflow_state_id]?.toLowerCase() ?? "";
     if (storyFilter === "done") return stateName.includes("done") || stateName.includes("complete");
@@ -497,7 +499,7 @@ export default function BrowseStep({
     });
   }
 
-  const noEpicStories = data.stories.filter((s) => s.epic_id === null);
+  const noEpicStories = data.stories.filter((s) => s.epic_id === null || !teamEpicIds.has(s.epic_id));
   const noEpicSelectedCount = noEpicStories.filter((s) => selectedStoryIds.has(s.id)).length;
   const noEpicAllChecked = noEpicStories.length > 0 && noEpicSelectedCount === noEpicStories.length;
   const noEpicSomeChecked = noEpicSelectedCount > 0 && noEpicSelectedCount < noEpicStories.length;
