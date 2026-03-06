@@ -258,7 +258,7 @@ export default function BrowseStep({
         );
         for (const stories of batchResults) {
           for (const story of stories) {
-            if (!seenIds.has(story.id)) {
+            if (!seenIds.has(story.id) && !story.archived) {
               seenIds.add(story.id);
               allStories.push(story);
             }

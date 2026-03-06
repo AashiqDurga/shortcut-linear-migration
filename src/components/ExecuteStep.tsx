@@ -729,8 +729,14 @@ export default function ExecuteStep({
         if (labelId) issueLabelIds.push(labelId);
       }
 
-      // Resolve state
-      const linearStateId = stateMap[String(story.workflow_state_id)] ?? undefined;
+      // Resolve state — archived stories are forced to the cancelled state so
+      // they don't appear on the board (they should have been filtered in BrowseStep
+      // but this is a safety net for any that slip through).
+      const team = linearData.teams.find((t) => t.id === mapping.linearTeamId);
+      const cancelledState = team?.states.nodes.find((s) => s.type === "cancelled");
+      const linearStateId = story.archived
+        ? (cancelledState?.id ?? stateMap[String(story.workflow_state_id)] ?? undefined)
+        : (stateMap[String(story.workflow_state_id)] ?? undefined);
 
       // Resolve assignee — only set if the Shortcut member was explicitly mapped to a
       // known Linear user ID. Empty string means "unmatched / left the org" → unassigned.

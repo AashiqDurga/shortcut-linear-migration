@@ -145,6 +145,31 @@ export const ISSUE_BY_SHORTCUT_URL_QUERY = `
   }
 `;
 
+// Same as above but also returns the current state — used by FixArchivedStep
+export const ISSUE_WITH_STATE_BY_URL_QUERY = `
+  query CheckIssueWithStateByShortcutUrl($url: String!) {
+    issues(filter: { attachments: { url: { eq: $url } } }) {
+      nodes {
+        id
+        identifier
+        url
+        state {
+          id
+          name
+          type
+        }
+      }
+    }
+  }
+`;
+
+export interface LinearIssueWithState {
+  id: string;
+  identifier: string;
+  url: string;
+  state: { id: string; name: string; type: string };
+}
+
 // GraphQL Mutations
 
 export const CREATE_LABEL_MUTATION = `

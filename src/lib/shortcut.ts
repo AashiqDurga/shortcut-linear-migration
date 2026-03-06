@@ -144,6 +144,7 @@ export interface ShortcutComment {
 export interface ShortcutStory {
   id: number;
   name: string;
+  archived: boolean;
   description: string;
   story_type: "feature" | "bug" | "chore";
   workflow_state_id: number;

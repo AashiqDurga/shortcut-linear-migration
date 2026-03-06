@@ -7,9 +7,10 @@ import BrowseStep, { type BrowseData, type Selection } from "@/components/Browse
 import ConfigureStep, { type MappingConfig, type LinearData } from "@/components/ConfigureStep";
 import PreviewStep from "@/components/PreviewStep";
 import ExecuteStep from "@/components/ExecuteStep";
+import FixArchivedStep from "@/components/FixArchivedStep";
 import type { ShortcutGroup } from "@/lib/shortcut";
 
-type Step = "connect" | "team" | "browse" | "configure" | "preview" | "execute";
+type Step = "connect" | "team" | "browse" | "configure" | "preview" | "execute" | "fix-archived";
 
 const STEPS: { id: Step; label: string }[] = [
   { id: "connect", label: "Connect" },
@@ -105,6 +106,11 @@ export default function Home() {
     setStep("browse");
   }
 
+  function handleSelectGroupForFix(group: ShortcutGroup) {
+    setSelectedGroup(group);
+    setStep("fix-archived");
+  }
+
   function handleBrowseNext(data: BrowseData, sel: Selection) {
     setBrowseData(data);
     setSelection(sel);
@@ -139,7 +145,10 @@ export default function Home() {
               Granular, phased migration with full control
             </p>
           </div>
-          <StepIndicator current={step} />
+          {step === "fix-archived"
+            ? <span className="text-sm font-medium text-blue-600">Fix archived stories</span>
+            : <StepIndicator current={step} />
+          }
         </div>
       </header>
 
@@ -152,6 +161,7 @@ export default function Home() {
             shortcutToken={shortcutToken}
             linearToken={linearToken}
             onSelect={handleSelectGroup}
+            onSelectForFix={handleSelectGroupForFix}
             onBack={() => setStep("connect")}
           />
         )}
@@ -190,6 +200,16 @@ export default function Home() {
               onBack={() => setStep("configure")}
             />
           )}
+
+        {step === "fix-archived" && selectedGroup && (
+          <FixArchivedStep
+            shortcutToken={shortcutToken}
+            linearToken={linearToken}
+            selectedGroup={selectedGroup}
+            onBack={() => setStep("team")}
+            onStartOver={handleStartOver}
+          />
+        )}
 
         {step === "execute" &&
           browseData &&
