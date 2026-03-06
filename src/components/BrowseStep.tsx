@@ -267,33 +267,36 @@ export default function BrowseStep({
         }
       }
 
-      // Broad catch-all search: finds any team stories missed by the epic scan —
-      // stories in cross-team epics, stories with no epic, etc.
-      // seenIds deduplication ensures no doubles with the epic fetch above.
+      // Broad catch-all search — run twice because Shortcut's search API excludes
+      // "Done" workflow state stories by default. First pass gets active stories,
+      // second pass explicitly gets done stories. seenIds deduplicates everything.
       setLoadingMsg("Fetching remaining team stories…");
-      try {
-        let catchNext: string | null = null;
-        let catchPage = 0;
-        do {
-          const body: Record<string, unknown> = {
-            query: `group:${selectedGroup.mention_name}`,
-            page_size: 25,
-          };
-          if (catchNext) body.next = catchNext;
-          const result = await shortcutRequest<ShortcutSearchResult>(
-            shortcutToken, "POST", "search/stories", { body }
-          );
-          for (const story of result.data) {
-            if (!seenIds.has(story.id) && !story.archived) {
-              seenIds.add(story.id);
-              allStories.push(story);
+      const catchQueries = [
+        `group:${selectedGroup.mention_name}`,
+        `group:${selectedGroup.mention_name} is:done`,
+      ];
+      for (const query of catchQueries) {
+        try {
+          let catchNext: string | null = null;
+          let catchPage = 0;
+          do {
+            const body: Record<string, unknown> = { query, page_size: 25 };
+            if (catchNext) body.next = catchNext;
+            const result = await shortcutRequest<ShortcutSearchResult>(
+              shortcutToken, "POST", "search/stories", { body }
+            );
+            for (const story of result.data) {
+              if (!seenIds.has(story.id) && !story.archived) {
+                seenIds.add(story.id);
+                allStories.push(story);
+              }
             }
-          }
-          catchNext = result.next;
-          catchPage++;
-        } while (catchNext && catchPage < 20);
-      } catch (err) {
-        console.warn("[browse] Could not fetch remaining team stories:", err);
+            catchNext = result.next;
+            catchPage++;
+          } while (catchNext && catchPage < 20);
+        } catch (err) {
+          console.warn(`[browse] Could not fetch stories (${query}):`, err);
+        }
       }
 
       setData({ milestones: groupMilestones, epics: groupEpics, iterations: groupIterations, stories: allStories, members, workflows });
