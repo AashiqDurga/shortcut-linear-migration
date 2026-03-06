@@ -43,6 +43,7 @@ interface Props {
 }
 
 type Filter = "all" | "open" | "done";
+type StoryFilter = "all" | "open" | "done" | "no-epic";
 
 function isEpicOpen(e: ShortcutEpic) {
   return e.state !== "done" && e.state !== "closed";
@@ -99,6 +100,24 @@ function FilterBar({ filter, onFilter }: { filter: Filter; onFilter: (f: Filter)
   return (
     <div className="flex gap-1">
       {(["all", "open", "done"] as Filter[]).map((f) => (
+        <button
+          key={f}
+          onClick={() => onFilter(f)}
+          className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+            filter === f ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          {f}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function StoryFilterBar({ filter, onFilter }: { filter: StoryFilter; onFilter: (f: StoryFilter) => void }) {
+  return (
+    <div className="flex gap-1">
+      {(["all", "open", "done", "no-epic"] as StoryFilter[]).map((f) => (
         <button
           key={f}
           onClick={() => onFilter(f)}
@@ -206,7 +225,7 @@ export default function BrowseStep({
   const [milestoneFilter, setMilestoneFilter] = useState<Filter>("all");
   const [epicFilter, setEpicFilter] = useState<Filter>("all");
   const [iterationFilter, setIterationFilter] = useState<Filter>("all");
-  const [storyFilter, setStoryFilter] = useState<Filter>("all");
+  const [storyFilter, setStoryFilter] = useState<StoryFilter>("all");
   const [search, setSearch] = useState("");
 
   // Sets of already-migrated names/IDs — populated by querying Linear in the background
@@ -399,6 +418,7 @@ export default function BrowseStep({
 
   const filteredStories = data.stories.filter((s) => {
     if (q && !s.name.toLowerCase().includes(q) && !String(s.id).includes(q)) return false;
+    if (storyFilter === "no-epic") return s.epic_id === null;
     if (storyFilter === "all") return true;
     const stateName = stateMap[s.workflow_state_id]?.toLowerCase() ?? "";
     if (storyFilter === "done") return stateName.includes("done") || stateName.includes("complete");
@@ -614,7 +634,7 @@ export default function BrowseStep({
               ({selectedStoryIds.size}/{data.stories.length})
             </span>
           </div>
-          <FilterBar filter={storyFilter} onFilter={setStoryFilter} />
+          <StoryFilterBar filter={storyFilter} onFilter={setStoryFilter} />
         </div>
         <div className="max-h-72 overflow-y-auto">
           {filteredStories.length === 0 ? (
