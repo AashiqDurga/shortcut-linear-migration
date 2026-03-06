@@ -15,6 +15,7 @@ import type {
   ShortcutStory,
   ShortcutMember,
   ShortcutWorkflow,
+  ShortcutSearchResult,
 } from "@/lib/shortcut";
 
 export interface BrowseData {
@@ -266,6 +267,33 @@ export default function BrowseStep({
         }
       }
 
+      // Fetch stories with no epic for this group
+      setLoadingMsg("Fetching stories without epics…");
+      try {
+        let noEpicNext: string | null = null;
+        let noEpicPage = 0;
+        do {
+          const body: Record<string, unknown> = {
+            query: `!has:epic group:${selectedGroup.mention_name}`,
+            page_size: 25,
+          };
+          if (noEpicNext) body.next = noEpicNext;
+          const result = await shortcutRequest<ShortcutSearchResult>(
+            shortcutToken, "POST", "search/stories", { body }
+          );
+          for (const story of result.data) {
+            if (!seenIds.has(story.id) && !story.archived) {
+              seenIds.add(story.id);
+              allStories.push(story);
+            }
+          }
+          noEpicNext = result.next;
+          noEpicPage++;
+        } while (noEpicNext && noEpicPage < 20);
+      } catch (err) {
+        console.warn("[browse] Could not fetch no-epic stories:", err);
+      }
+
       setData({ milestones: groupMilestones, epics: groupEpics, iterations: groupIterations, stories: allStories, members, workflows });
 
       // Check Linear for already-migrated items — 3 batch queries, not per-item:
@@ -444,6 +472,21 @@ export default function BrowseStep({
     });
   }
 
+  const noEpicStories = data.stories.filter((s) => s.epic_id === null);
+  const noEpicSelectedCount = noEpicStories.filter((s) => selectedStoryIds.has(s.id)).length;
+  const noEpicAllChecked = noEpicStories.length > 0 && noEpicSelectedCount === noEpicStories.length;
+  const noEpicSomeChecked = noEpicSelectedCount > 0 && noEpicSelectedCount < noEpicStories.length;
+
+  function toggleAllNoEpic() {
+    const ids = noEpicStories.map((s) => s.id);
+    setSelectedStoryIds((prev) => {
+      const n = new Set(prev);
+      if (noEpicAllChecked) ids.forEach((id) => n.delete(id));
+      else ids.forEach((id) => n.add(id));
+      return n;
+    });
+  }
+
   const totalSelected =
     selectedMilestoneIds.size + selectedEpicIds.size + selectedIterationIds.size + selectedStoryIds.size;
 
@@ -502,6 +545,34 @@ export default function BrowseStep({
         onToggle={toggleEpic}
         onSelectAll={(ids) => selectAll(setSelectedEpicIds, ids)}
       />
+
+      {/* No epic stories */}
+      {noEpicStories.length > 0 && (
+        <div className="rounded-lg border bg-card">
+          <div className="flex items-center px-4 py-3 border-b gap-2">
+            <Checkbox
+              checked={noEpicAllChecked ? true : noEpicSomeChecked ? "indeterminate" : false}
+              onCheckedChange={toggleAllNoEpic}
+            />
+            <span className="font-medium text-sm">No epic</span>
+            <span className="text-xs text-muted-foreground">
+              ({noEpicSelectedCount}/{noEpicStories.length}) → no project in Linear
+            </span>
+          </div>
+          <div className="max-h-56 overflow-y-auto divide-y divide-border/50">
+            {noEpicStories.map((story) => (
+              <CheckboxRow
+                key={story.id}
+                checked={selectedStoryIds.has(story.id)}
+                onChange={() => toggle(selectedStoryIds, setSelectedStoryIds, story.id)}
+                label={story.name}
+                sub={`#${story.id} · ${stateMap[story.workflow_state_id] ?? "Unknown"}${story.owner_ids[0] ? " · " + (memberMap[story.owner_ids[0]] ?? "Unknown") : ""}`}
+                badge={migratedStoryIds.has(story.id) ? <MigratedBadge /> : undefined}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       <Section
         title="Iterations → Cycles"
