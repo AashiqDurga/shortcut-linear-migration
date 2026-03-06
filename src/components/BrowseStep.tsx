@@ -233,7 +233,7 @@ export default function BrowseStep({
         milestones = await shortcutRequest<ShortcutMilestone[]>(shortcutToken, "GET", "milestones");
       }
 
-      const groupEpics = epics.filter((e) => e.group_ids.includes(selectedGroup.id));
+      const groupEpics = epics.filter((e) => e.group_ids.includes(selectedGroup.id) && !e.archived);
       const groupIterations = iterations.filter((it) => it.group_ids.includes(selectedGroup.id));
 
       const groupMilestoneIds = new Set(

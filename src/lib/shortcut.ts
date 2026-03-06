@@ -43,6 +43,7 @@ export interface ShortcutEpic {
   name: string;
   description: string;
   state: string;
+  archived: boolean;
   group_ids: string[];
   milestone_id: number | null;
   labels: Array<{ id: number; name: string; color: string }>;
