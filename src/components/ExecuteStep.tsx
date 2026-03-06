@@ -567,7 +567,8 @@ export default function ExecuteStep({
         epicToProject[epic.id] = existingProject.id;
         addLog(`  Updating project "${projectName}"…`);
         try {
-          const projectState = epic.state === "done" || epic.state === "closed" ? "completed" : "started";
+          const projectState = epic.state === "done" || epic.state === "closed" ? "completed" :
+          epic.state === "in progress" ? "started" : "planned";
           await linearRequest(linearToken, UPDATE_PROJECT_MUTATION, {
             id: existingProject.id,
             input: {
@@ -593,7 +594,8 @@ export default function ExecuteStep({
       addLog(`  Creating project "${projectName}"…`);
       try {
         const projectState =
-          epic.state === "done" || epic.state === "closed" ? "completed" : "started";
+          epic.state === "done" || epic.state === "closed" ? "completed" :
+          epic.state === "in progress" ? "started" : "planned";
         const res = await linearRequest<{
           projectCreate: { success: boolean; project: LinearProject };
         }>(linearToken, CREATE_PROJECT_MUTATION, {

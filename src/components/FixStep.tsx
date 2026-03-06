@@ -236,7 +236,9 @@ export default function FixStep({
           );
           for (const epic of fullEpics) {
             const projectName = epic.name.length > 80 ? epic.name.slice(0, 77) + "…" : epic.name;
-            const proposedState = epic.state === "done" || epic.state === "closed" ? "completed" : "started";
+            const proposedState =
+              epic.state === "done" || epic.state === "closed" ? "completed" :
+              epic.state === "in progress" ? "started" : "planned";
             const match = projectsByName[projectName.toLowerCase()] ?? null;
             found.push({
               epic,
