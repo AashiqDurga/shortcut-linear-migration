@@ -286,18 +286,20 @@ export default function BrowseStep({
         }
       }
 
-      // Broad catch-all search — run twice because Shortcut's search API excludes
-      // "Done" workflow state stories by default. First pass gets active stories,
-      // second pass explicitly gets done stories. seenIds deduplicates everything.
+      // Targeted searches for stories missed by the epic scan:
+      //   1. Active no-epic team stories   — !has:epic group:mention_name
+      //   2. Done no-epic team stories     — !has:epic group:mention_name is:done
+      //   3. Active cross-team-epic stories — group:mention_name (deduped)
+      // Runs without a page cap so we never cut off on pagination.
       setLoadingMsg("Fetching remaining team stories…");
       const catchQueries = [
+        `!has:epic group:${selectedGroup.mention_name}`,
+        `!has:epic group:${selectedGroup.mention_name} is:done`,
         `group:${selectedGroup.mention_name}`,
-        `group:${selectedGroup.mention_name} is:done`,
       ];
       for (const query of catchQueries) {
         try {
           let catchNext: string | null = null;
-          let catchPage = 0;
           do {
             const body: Record<string, unknown> = { query, page_size: 25 };
             if (catchNext) body.next = catchNext;
@@ -311,8 +313,7 @@ export default function BrowseStep({
               }
             }
             catchNext = result.next;
-            catchPage++;
-          } while (catchNext && catchPage < 20);
+          } while (catchNext);
         } catch (err) {
           console.warn(`[browse] Could not fetch stories (${query}):`, err);
         }
